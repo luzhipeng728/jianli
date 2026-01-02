@@ -24,7 +24,11 @@ export async function* chatStream(
 ): AsyncGenerator<StreamChunk> {
   const response = await fetch(`${API_BASE}/api/chat/message`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+    },
     body: JSON.stringify({
       message,
       session_id: sessionId,
@@ -32,27 +36,49 @@ export async function* chatStream(
     }),
   })
 
-  const reader = response.body?.getReader()
-  const decoder = new TextDecoder()
+  if (!response.ok) {
+    throw new Error(`HTTP error! status: ${response.status}`)
+  }
 
+  const reader = response.body?.getReader()
   if (!reader) return
+
+  const decoder = new TextDecoder()
+  let buffer = ''
 
   while (true) {
     const { done, value } = await reader.read()
     if (done) break
 
-    const text = decoder.decode(value)
-    const lines = text.split('\n')
+    // 将新数据追加到缓冲区
+    buffer += decoder.decode(value, { stream: true })
+
+    // 按行分割处理
+    const lines = buffer.split('\n')
+    // 保留最后一行（可能不完整）
+    buffer = lines.pop() || ''
 
     for (const line of lines) {
-      if (line.startsWith('data: ')) {
+      const trimmedLine = line.trim()
+      if (trimmedLine.startsWith('data: ')) {
         try {
-          const chunk: StreamChunk = JSON.parse(line.slice(6))
+          const chunk: StreamChunk = JSON.parse(trimmedLine.slice(6))
           yield chunk
         } catch (e) {
           // 忽略解析错误
+          console.warn('Failed to parse SSE data:', trimmedLine)
         }
       }
+    }
+  }
+
+  // 处理缓冲区中剩余的数据
+  if (buffer.trim().startsWith('data: ')) {
+    try {
+      const chunk: StreamChunk = JSON.parse(buffer.trim().slice(6))
+      yield chunk
+    } catch (e) {
+      // 忽略
     }
   }
 }
