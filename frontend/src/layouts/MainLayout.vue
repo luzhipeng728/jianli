@@ -24,13 +24,13 @@
           :key="item.path"
           :to="item.path"
           custom
-          v-slot="{ isActive, navigate }"
+          v-slot="{ isExactActive, navigate }"
         >
           <div
             @click="navigate"
             :class="[
               'sidebar-item',
-              isActive ? 'sidebar-item-active' : ''
+              isExactActive ? 'sidebar-item-active' : ''
             ]"
           >
             <component :is="item.icon" class="w-5 h-5" />

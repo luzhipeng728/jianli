@@ -174,7 +174,8 @@ const recentActivities = ref<Activity[]>([])
 onMounted(async () => {
   try {
     // Fetch resume count
-    const resumes = await request.get('/api/resumes')
+    const result = await request.get('/api/resume/list')
+    const resumes = result?.data || []
     if (Array.isArray(resumes)) {
       stats.value.totalResumes = resumes.length
       stats.value.todayParsed = resumes.filter((r: any) => {
