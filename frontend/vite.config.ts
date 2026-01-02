@@ -15,9 +15,14 @@ export default defineConfig({
     host: '0.0.0.0',
     proxy: {
       '/api': {
-        target: 'http://localhost:8001',
+        target: 'http://localhost:8002',
         changeOrigin: true,
       },
     },
+  },
+  preview: {
+    port: 4173,
+    host: '0.0.0.0',
+    allowedHosts: ['resume.luzhipeng.com', 'localhost', '154.222.16.164'],
   },
 })
