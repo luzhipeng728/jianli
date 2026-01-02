@@ -15,11 +15,15 @@ export interface ResumeData {
     school: string
     degree: string
     major: string
+    start_date?: string
+    end_date?: string
   }>
   experience: Array<{
     company: string
     title: string
     duties: string
+    start_date?: string
+    end_date?: string
   }>
   skills: {
     hard_skills: string[]
@@ -32,13 +36,23 @@ export interface ResumeData {
   created_at: string
 }
 
-export const uploadResume = (file: File) => {
+export interface UploadResult {
+  status: string
+  data?: ResumeData
+  error?: string
+}
+
+export interface ListResult {
+  data: ResumeData[]
+}
+
+export const uploadResume = (file: File): Promise<UploadResult> => {
   const formData = new FormData()
   formData.append('file', file)
   return request.post('/api/resume/upload', formData)
 }
 
-export const getResumeList = (page = 1, size = 20) => {
+export const getResumeList = (page = 1, size = 20): Promise<ListResult> => {
   return request.get('/api/resume/list', { params: { page, size } })
 }
 
