@@ -19,6 +19,7 @@ app.add_middleware(
 
 app.include_router(knowledge.router)
 app.include_router(chat.router)
+app.include_router(resume.router)
 
 
 @app.get("/health")
