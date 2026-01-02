@@ -1,6 +1,7 @@
 """简历解析与问答助手 - 后端应用主模块"""
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from app.api.routes import knowledge
 
 app = FastAPI(
     title="简历解析与问答助手",
@@ -15,6 +16,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(knowledge.router)
 
 
 @app.get("/health")
