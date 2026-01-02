@@ -66,16 +66,45 @@ class ResumeParser:
 
         resume_id = str(uuid.uuid4())
 
+        # 清理基本信息中的年龄字段
+        basic_info_data = data.get("basic_info", {})
+        if "age" in basic_info_data and basic_info_data["age"]:
+            age_str = str(basic_info_data["age"])
+            # 移除非数字字符（如"岁"）
+            age_digits = ''.join(filter(str.isdigit, age_str))
+            basic_info_data["age"] = int(age_digits) if age_digits else None
+
+        # 清理工作经历中的duties字段（可能是列表）
+        experience_list = []
+        for exp in data.get("experience", []):
+            if "duties" in exp and isinstance(exp["duties"], list):
+                exp["duties"] = "\n".join(exp["duties"])
+            experience_list.append(exp)
+
+        # 清理求职意向中的薪资字段
+        job_intention_data = data.get("job_intention", {})
+        for field in ["salary_min", "salary_max"]:
+            if field in job_intention_data and job_intention_data[field]:
+                val_str = str(job_intention_data[field]).upper()
+                # 移除K/k后缀，乘以1000
+                if "K" in val_str:
+                    val_str = val_str.replace("K", "")
+                    digits = ''.join(filter(str.isdigit, val_str))
+                    job_intention_data[field] = int(digits) * 1000 if digits else None
+                else:
+                    digits = ''.join(filter(str.isdigit, val_str))
+                    job_intention_data[field] = int(digits) if digits else None
+
         return ResumeData(
             id=resume_id,
             file_name=filename,
             file_type=file_type,
             raw_text=raw_text,
-            basic_info=BasicInfo(**data.get("basic_info", {})),
+            basic_info=BasicInfo(**basic_info_data),
             education=[Education(**e) for e in data.get("education", [])],
-            experience=[Experience(**e) for e in data.get("experience", [])],
+            experience=[Experience(**e) for e in experience_list],
             skills=Skills(**data.get("skills", {})),
-            job_intention=JobIntention(**data.get("job_intention", {})),
+            job_intention=JobIntention(**job_intention_data),
             warnings=[Warning(**w) for w in data.get("warnings", [])],
         )
 
