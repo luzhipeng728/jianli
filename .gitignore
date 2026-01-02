@@ -54,3 +54,11 @@ elasticsearch_data/
 
 # Redis data
 redis_data/
+
+# Node.js / Frontend
+node_modules/
+dist/
+dist-ssr/
+*.local
+.npm
+.eslintcache
