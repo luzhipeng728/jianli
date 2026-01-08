@@ -2,7 +2,7 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api.routes import knowledge, chat, resume, batch, auth, jd, interview, ws_interview, ws_omni_interview, voice_interview, ws_voice_interview, ws_structured_interview
+from app.api.routes import knowledge, chat, resume, batch, auth, jd, interview, ws_interview, ws_omni_interview, voice_interview, ws_voice_interview, ws_structured_interview, interview_replay
 from app.api.middleware.rate_limit import RateLimitMiddleware
 from app.config import get_settings
 from app.services.background_worker import background_worker
@@ -64,6 +64,7 @@ app.include_router(ws_omni_interview.router)  # Omni Realtime 语音面试 (WebS
 app.include_router(voice_interview.router, prefix="/api/voice-interview", tags=["voice-interview"])  # HTTP 语音面试
 app.include_router(ws_voice_interview.router)  # ASR+LLM+TTS 分离架构语音面试 (推荐，无60秒限制)
 app.include_router(ws_structured_interview.router, tags=["structured-interview"])  # 7-Phase Structured Interview with State Machine
+app.include_router(interview_replay.router)  # HR Interview Replay REST API
 
 
 @app.get("/health")
