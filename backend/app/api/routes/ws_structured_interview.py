@@ -34,6 +34,7 @@ router = APIRouter()
 
 # Global session manager
 active_sessions: Dict[str, "StructuredInterviewSession"] = {}
+active_sessions_lock = asyncio.Lock()
 
 
 class StructuredInterviewSession:
@@ -478,8 +479,9 @@ class StructuredInterviewSession:
         self.hr_watchers.clear()
 
         # Remove from active sessions
-        if self.session_id in active_sessions:
-            del active_sessions[self.session_id]
+        async with active_sessions_lock:
+            if self.session_id in active_sessions:
+                del active_sessions[self.session_id]
 
 
 @router.websocket("/ws/structured-interview/{session_id}")
@@ -508,9 +510,26 @@ async def structured_interview_websocket(websocket: WebSocket, session_id: str):
     session: Optional[StructuredInterviewSession] = None
 
     try:
-        # Wait for init message
-        init_data = await websocket.receive_text()
-        init_msg = json.loads(init_data)
+        # Wait for init message with timeout
+        try:
+            init_data = await asyncio.wait_for(websocket.receive_text(), timeout=30)
+        except asyncio.TimeoutError:
+            await websocket.send_json({
+                "type": "error",
+                "message": "Timeout waiting for init message"
+            })
+            await websocket.close()
+            return
+
+        try:
+            init_msg = json.loads(init_data)
+        except json.JSONDecodeError:
+            await websocket.send_json({
+                "type": "error",
+                "message": "Invalid JSON format"
+            })
+            await websocket.close()
+            return
 
         if init_msg.get("type") != "init":
             await websocket.send_json({
@@ -545,15 +564,31 @@ async def structured_interview_websocket(websocket: WebSocket, session_id: str):
         )
 
         # Register session
-        active_sessions[session_id] = session
+        async with active_sessions_lock:
+            active_sessions[session_id] = session
 
         # Start interview
         await session.start()
 
         # Message loop
         while True:
-            data = await websocket.receive_text()
-            msg = json.loads(data)
+            try:
+                data = await asyncio.wait_for(websocket.receive_text(), timeout=300)
+            except asyncio.TimeoutError:
+                await websocket.send_json({
+                    "type": "error",
+                    "message": "Timeout waiting for message"
+                })
+                break
+
+            try:
+                msg = json.loads(data)
+            except json.JSONDecodeError:
+                await websocket.send_json({
+                    "type": "error",
+                    "message": "Invalid JSON format"
+                })
+                continue
 
             msg_type = msg.get("type")
 
@@ -609,7 +644,8 @@ async def hr_monitor_websocket(websocket: WebSocket, session_id: str):
     await websocket.accept()
 
     # Find session
-    session = active_sessions.get(session_id)
+    async with active_sessions_lock:
+        session = active_sessions.get(session_id)
     if not session:
         await websocket.send_json({
             "type": "error",
@@ -633,8 +669,23 @@ async def hr_monitor_websocket(websocket: WebSocket, session_id: str):
 
         # Message loop
         while True:
-            data = await websocket.receive_text()
-            msg = json.loads(data)
+            try:
+                data = await asyncio.wait_for(websocket.receive_text(), timeout=300)
+            except asyncio.TimeoutError:
+                await websocket.send_json({
+                    "type": "error",
+                    "message": "Timeout waiting for message"
+                })
+                break
+
+            try:
+                msg = json.loads(data)
+            except json.JSONDecodeError:
+                await websocket.send_json({
+                    "type": "error",
+                    "message": "Invalid JSON format"
+                })
+                continue
 
             msg_type = msg.get("type")
 
@@ -671,14 +722,15 @@ async def hr_monitor_websocket(websocket: WebSocket, session_id: str):
 async def list_active_sessions():
     """List all active interview sessions"""
     sessions = []
-    for sid, session in active_sessions.items():
-        sessions.append({
-            "session_id": sid,
-            "resume_id": session.resume_id,
-            "jd_id": session.jd_id,
-            "current_phase": session.state_machine.record.current_phase.value,
-            "current_round": session.state_machine.record.current_round,
-            "status": session.state_machine.record.status.value,
-            "hr_watchers": len(session.hr_watchers)
-        })
+    async with active_sessions_lock:
+        for sid, session in active_sessions.items():
+            sessions.append({
+                "session_id": sid,
+                "resume_id": session.resume_id,
+                "jd_id": session.jd_id,
+                "current_phase": session.state_machine.record.current_phase.value,
+                "current_round": session.state_machine.record.current_round,
+                "status": session.state_machine.record.status.value,
+                "hr_watchers": len(session.hr_watchers)
+            })
     return {"sessions": sessions}
