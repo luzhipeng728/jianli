@@ -1,0 +1,1037 @@
+<template>
+  <div class="h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 flex flex-col overflow-hidden">
+    <!-- 未开始状态 - 欢迎页 -->
+    <div v-if="!isStarted" class="flex-1 flex items-center justify-center p-4">
+      <div class="w-full max-w-lg">
+        <div class="bg-white/70 backdrop-blur-xl rounded-3xl shadow-xl border border-white/50 p-8 text-center">
+          <!-- Logo动画 -->
+          <div class="relative w-32 h-32 mx-auto mb-6">
+            <div class="absolute inset-0 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-full animate-pulse"></div>
+            <div class="absolute inset-2 bg-white rounded-full flex items-center justify-center">
+              <svg class="w-12 h-12 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path>
+              </svg>
+            </div>
+          </div>
+
+          <h1 class="text-2xl font-bold text-gray-900 mb-2">AI 语音面试</h1>
+          <p class="text-gray-600 mb-6">准备好后点击开始，AI面试官将与您实时对话</p>
+
+          <div class="bg-blue-50 rounded-2xl p-4 mb-6 text-left">
+            <div class="flex items-start space-x-3 mb-3">
+              <svg class="w-5 h-5 text-blue-600 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+              </svg>
+              <span class="text-gray-700 text-sm">确保麦克风和扬声器正常工作</span>
+            </div>
+            <div class="flex items-start space-x-3 mb-3">
+              <svg class="w-5 h-5 text-blue-600 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+              </svg>
+              <span class="text-gray-700 text-sm">保持安静的环境以获得最佳体验</span>
+            </div>
+            <div class="flex items-start space-x-3">
+              <svg class="w-5 h-5 text-blue-600 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+              </svg>
+              <span class="text-gray-700 text-sm">说完后点击<strong>发送回答</strong>按钮提交</span>
+            </div>
+          </div>
+
+          <button
+            @click="startInterview"
+            :disabled="isConnecting"
+            class="w-full py-4 px-6 bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-semibold rounded-2xl shadow-lg hover:shadow-xl transform hover:scale-[1.02] transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
+          >
+            <span v-if="isConnecting" class="flex items-center justify-center">
+              <svg class="animate-spin -ml-1 mr-3 h-5 w-5 text-white" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+              </svg>
+              正在连接...
+            </span>
+            <span v-else class="flex items-center justify-center">
+              <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path>
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+              </svg>
+              开始面试
+            </span>
+          </button>
+
+          <p v-if="connectionError" class="mt-4 text-red-500 text-sm">{{ connectionError }}</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- 面试进行中 -->
+    <template v-else>
+      <!-- 顶部状态栏 -->
+      <div class="flex-shrink-0 bg-white/70 backdrop-blur-xl border-b border-white/50 px-4 py-3">
+        <div class="max-w-4xl mx-auto flex items-center justify-between">
+          <div class="flex items-center space-x-3">
+            <div class="w-2 h-2 rounded-full animate-pulse" :class="interviewStatus === 'stopped' ? 'bg-gray-400' : 'bg-green-500'"></div>
+            <span class="font-medium text-gray-900">AI 语音面试</span>
+            <span class="text-sm px-2 py-0.5 rounded-full" :class="statusBadgeClass">{{ statusText }}</span>
+
+            <!-- Phase Progress -->
+            <div v-if="currentPhase" class="flex items-center space-x-2 ml-4">
+              <div class="flex space-x-1">
+                <div v-for="phase in phaseOrder" :key="phase"
+                  class="w-2 h-2 rounded-full transition-all"
+                  :class="{
+                    'bg-green-500': phaseOrder.indexOf(phase) < phaseOrder.indexOf(currentPhase),
+                    'bg-blue-500 animate-pulse': phase === currentPhase,
+                    'bg-gray-300': phaseOrder.indexOf(phase) > phaseOrder.indexOf(currentPhase)
+                  }"
+                  :title="phaseNames[phase]"
+                ></div>
+              </div>
+              <span class="text-sm text-gray-600">{{ phaseDescription }}</span>
+              <span class="text-xs text-gray-400">({{ currentRound + 1 }}/{{ maxRounds }})</span>
+            </div>
+          </div>
+          <div class="flex items-center space-x-4">
+            <div class="text-right">
+              <span class="text-2xl font-mono font-bold text-gray-900">{{ formatDuration(duration) }}</span>
+            </div>
+            <button
+              @click="endInterview"
+              class="text-gray-500 hover:text-red-500 transition-colors p-2 hover:bg-red-50 rounded-lg"
+              title="结束面试"
+            >
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+              </svg>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 主内容区 -->
+      <div class="flex-1 flex flex-col max-w-4xl w-full mx-auto p-4 overflow-hidden">
+        <!-- AI面试官区域 -->
+        <div class="flex-shrink-0 mb-4">
+          <div class="bg-white/70 backdrop-blur-xl rounded-2xl border border-white/50 shadow-lg p-4">
+            <div class="flex items-center space-x-4">
+              <!-- AI头像 + 动效 -->
+              <div class="relative flex-shrink-0">
+                <div
+                  class="w-16 h-16 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center transition-transform duration-300"
+                  :class="{ 'scale-110': interviewStatus === 'speaking' }"
+                >
+                  <svg class="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path>
+                  </svg>
+                </div>
+                <!-- 说话动画波纹 -->
+                <div v-if="interviewStatus === 'speaking'" class="absolute inset-0">
+                  <div class="absolute inset-0 rounded-full bg-blue-400 animate-ping opacity-30"></div>
+                  <div class="absolute inset-0 rounded-full bg-blue-400 animate-ping opacity-20" style="animation-delay: 0.2s"></div>
+                </div>
+              </div>
+
+              <!-- AI状态信息 -->
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center space-x-2">
+                  <h3 class="font-semibold text-gray-900">AI 面试官</h3>
+                  <span class="text-xs px-2 py-0.5 rounded-full" :class="aiStatusBadgeClass">
+                    {{ aiStatusText }}
+                  </span>
+                </div>
+
+                <!-- 声波动画 -->
+                <div v-if="interviewStatus === 'speaking'" class="flex items-center space-x-1 mt-2 h-6">
+                  <div v-for="i in 12" :key="i"
+                    class="w-1 bg-gradient-to-t from-blue-500 to-indigo-500 rounded-full sound-wave"
+                    :style="{ animationDelay: `${i * 0.05}s` }"
+                  ></div>
+                </div>
+                <p v-else-if="interviewStatus === 'processing'" class="text-sm text-yellow-600 mt-2 flex items-center">
+                  <svg class="animate-spin w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                  </svg>
+                  正在思考...
+                </p>
+                <p v-else class="text-sm text-gray-500 mt-2">等待您的回答</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 对话区域 -->
+        <div class="flex-1 min-h-0 mb-4">
+          <div class="h-full bg-white/70 backdrop-blur-xl rounded-2xl border border-white/50 shadow-lg overflow-hidden">
+            <div ref="messagesContainer" class="h-full overflow-y-auto p-4 space-y-3">
+              <!-- 空状态 -->
+              <div v-if="messages.length === 0" class="h-full flex items-center justify-center">
+                <div class="text-center text-gray-400">
+                  <svg class="w-12 h-12 mx-auto mb-3 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"></path>
+                  </svg>
+                  <p>对话即将开始...</p>
+                </div>
+              </div>
+
+              <!-- 消息列表 -->
+              <template v-for="message in messages" :key="message.id">
+                <!-- System message (phase changes) -->
+                <div v-if="message.role === 'system'" class="flex justify-center">
+                  <div class="px-4 py-1 bg-gray-100 rounded-full text-sm text-gray-500">
+                    {{ message.content }}
+                  </div>
+                </div>
+
+                <!-- User or assistant message -->
+                <div v-else class="flex" :class="message.role === 'user' ? 'justify-end' : 'justify-start'">
+                  <div
+                    class="max-w-[85%] rounded-2xl px-4 py-2.5 shadow-sm"
+                    :class="message.role === 'user'
+                      ? 'bg-gradient-to-r from-blue-500 to-indigo-500 text-white rounded-br-md'
+                      : 'bg-white text-gray-800 rounded-bl-md border border-gray-100'"
+                  >
+                    <p class="whitespace-pre-wrap text-sm leading-relaxed">{{ message.content }}</p>
+                    <p class="text-xs mt-1" :class="message.role === 'user' ? 'text-blue-100' : 'text-gray-400'">
+                      {{ formatTime(message.timestamp) }}
+                    </p>
+                  </div>
+                </div>
+              </template>
+
+              <!-- 实时转录显示 -->
+              <div v-if="currentTranscript" class="flex justify-end">
+                <div class="max-w-[85%] rounded-2xl px-4 py-2.5 shadow-sm bg-blue-100 text-blue-800 rounded-br-md border border-blue-200">
+                  <p class="whitespace-pre-wrap text-sm leading-relaxed italic">{{ currentTranscript }}...</p>
+                </div>
+              </div>
+
+              <!-- AI实时响应显示 -->
+              <div v-if="currentResponse" class="flex justify-start">
+                <div class="max-w-[85%] rounded-2xl px-4 py-2.5 shadow-sm bg-white text-gray-800 rounded-bl-md border border-gray-100">
+                  <p class="whitespace-pre-wrap text-sm leading-relaxed">{{ currentResponse }}</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 底部控制区 -->
+        <div class="flex-shrink-0">
+          <div class="bg-white/80 backdrop-blur-xl rounded-2xl border border-white/50 shadow-lg p-4">
+            <div class="flex items-center space-x-4">
+              <!-- 麦克风状态 -->
+              <div class="flex items-center space-x-3 flex-1">
+                <div
+                  class="w-12 h-12 rounded-full flex items-center justify-center transition-all duration-300"
+                  :class="micStatusClass"
+                >
+                  <svg class="w-6 h-6 text-white" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"></path>
+                    <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"></path>
+                  </svg>
+                </div>
+
+                <!-- 状态显示 + 音量条 + 录音时长 -->
+                <div class="flex-1">
+                  <div v-if="interviewStatus === 'listening'" class="space-y-2">
+                    <div class="flex items-center justify-between">
+                      <div class="flex items-center space-x-2">
+                        <span class="inline-block w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+                        <span class="text-green-600 font-medium">正在录音...</span>
+                      </div>
+                      <!-- 录音时长显示 -->
+                      <div class="flex items-center space-x-2">
+                        <span class="text-sm font-mono text-gray-600">
+                          {{ formatDuration(recordingTime) }}
+                        </span>
+                      </div>
+                    </div>
+                    <!-- 音量可视化 -->
+                    <div class="flex items-end space-x-0.5 h-6">
+                      <div v-for="i in 20" :key="i"
+                        class="w-1.5 bg-gradient-to-t from-green-500 to-emerald-400 rounded-sm transition-all duration-75"
+                        :style="{ height: `${Math.min(100, Math.max(8, volumeLevel * (1 + Math.sin(i * 0.5) * 0.3)))}%` }">
+                      </div>
+                    </div>
+                  </div>
+                  <p v-else class="text-sm" :class="statusTextClass">{{ userStatusText }}</p>
+                </div>
+              </div>
+
+              <!-- 发送按钮 -->
+              <button
+                @click="commitAudio"
+                :disabled="interviewStatus !== 'listening'"
+                class="flex-shrink-0 px-6 py-3 rounded-xl font-semibold transition-all duration-300 flex items-center space-x-2"
+                :class="sendButtonClass"
+              >
+                <svg v-if="interviewStatus === 'listening'" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"></path>
+                </svg>
+                <svg v-else-if="interviewStatus === 'speaking'" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728"></path>
+                </svg>
+                <svg v-else class="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
+                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                </svg>
+                <span>{{ sendButtonText }}</span>
+              </button>
+            </div>
+
+            <!-- 提示文字 -->
+            <p v-if="interviewStatus === 'listening'" class="text-center text-xs text-gray-500 mt-3">
+              说完后点击"发送回答"按钮提交，无时间限制
+            </p>
+          </div>
+        </div>
+      </div>
+    </template>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { useRoute } from 'vue-router'
+
+interface Message {
+  id: string
+  role: 'user' | 'assistant' | 'system'
+  content: string
+  timestamp: string
+}
+
+const route = useRoute()
+
+// 状态
+const isStarted = ref(false)
+const isConnecting = ref(false)
+const connectionError = ref('')
+const interviewStatus = ref<'listening' | 'processing' | 'speaking' | 'stopped'>('listening')
+const messages = ref<Message[]>([])
+const duration = ref(0)
+const currentTranscript = ref('')
+const currentResponse = ref('')
+const volumeLevel = ref(0)
+const audioFrameCount = ref(0)
+
+// Phase tracking
+const currentPhase = ref('')
+const phaseDescription = ref('')
+const currentRound = ref(0)
+const maxRounds = ref(0)
+const phaseOrder = ['opening', 'self_intro', 'project_deep', 'tech_assess', 'behavioral', 'qa', 'closing']
+const phaseNames: Record<string, string> = {
+  'opening': '开场',
+  'self_intro': '自我介绍',
+  'project_deep': '项目深挖',
+  'tech_assess': '技术评估',
+  'behavioral': '行为面试',
+  'qa': '自由问答',
+  'closing': '结束'
+}
+
+// 录音时间（无限制，仅用于显示）
+const recordingTime = ref(0)
+let recordingTimer: number | null = null
+
+// DOM引用
+const messagesContainer = ref<HTMLElement>()
+
+// 计时器
+let durationTimer: number | null = null
+let pingTimer: number | null = null
+
+// WebSocket
+let ws: WebSocket | null = null
+
+// 音频相关
+let audioContext: AudioContext | null = null
+let mediaStream: MediaStream | null = null
+let audioWorkletNode: AudioWorkletNode | null = null
+let audioQueue: ArrayBuffer[] = []
+let isPlayingAudio = false
+
+const token = computed(() => route.params.token as string)
+
+// 状态显示
+const statusText = computed(() => {
+  if (interviewStatus.value === 'speaking') return '面试官提问中'
+  if (interviewStatus.value === 'processing') return '处理中'
+  if (interviewStatus.value === 'stopped') return '已结束'
+  return '等待回答'
+})
+
+const statusBadgeClass = computed(() => {
+  if (interviewStatus.value === 'speaking') return 'bg-blue-100 text-blue-700'
+  if (interviewStatus.value === 'processing') return 'bg-yellow-100 text-yellow-700'
+  if (interviewStatus.value === 'stopped') return 'bg-gray-100 text-gray-700'
+  return 'bg-green-100 text-green-700'
+})
+
+const aiStatusText = computed(() => {
+  if (interviewStatus.value === 'speaking') return '正在说话'
+  if (interviewStatus.value === 'processing') return '思考中'
+  return '等待中'
+})
+
+const aiStatusBadgeClass = computed(() => {
+  if (interviewStatus.value === 'speaking') return 'bg-blue-100 text-blue-600'
+  if (interviewStatus.value === 'processing') return 'bg-yellow-100 text-yellow-600'
+  return 'bg-gray-100 text-gray-500'
+})
+
+const micStatusClass = computed(() => {
+  if (interviewStatus.value === 'speaking') return 'bg-gray-400'
+  if (interviewStatus.value === 'processing') return 'bg-yellow-500'
+  return 'bg-green-500 animate-pulse'
+})
+
+const userStatusText = computed(() => {
+  if (interviewStatus.value === 'speaking') return '请聆听面试官...'
+  if (interviewStatus.value === 'processing') return '正在处理您的回答...'
+  if (interviewStatus.value === 'stopped') return '面试已结束'
+  return '正在录音...'
+})
+
+const statusTextClass = computed(() => {
+  if (interviewStatus.value === 'speaking') return 'text-blue-600'
+  if (interviewStatus.value === 'processing') return 'text-yellow-600'
+  if (interviewStatus.value === 'stopped') return 'text-gray-500'
+  return 'text-green-600'
+})
+
+const sendButtonText = computed(() => {
+  if (interviewStatus.value === 'speaking') return '聆听中'
+  if (interviewStatus.value === 'processing') return '处理中'
+  return '发送回答'
+})
+
+const sendButtonClass = computed(() => {
+  if (interviewStatus.value !== 'listening') {
+    return 'bg-gray-200 text-gray-400 cursor-not-allowed'
+  }
+  return 'bg-gradient-to-r from-green-500 to-emerald-500 text-white shadow-lg hover:shadow-xl hover:scale-105 cursor-pointer'
+})
+
+const formatTime = (timestamp: string) => {
+  const date = new Date(timestamp)
+  return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+}
+
+const formatDuration = (seconds: number) => {
+  const mins = Math.floor(seconds / 60)
+  const secs = seconds % 60
+  return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`
+}
+
+const scrollToBottom = async () => {
+  await nextTick()
+  if (messagesContainer.value) {
+    messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight
+  }
+}
+
+// 开始面试
+const startInterview = async () => {
+  isConnecting.value = true
+  connectionError.value = ''
+
+  try {
+    // 1. 请求麦克风权限
+    mediaStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        sampleRate: 16000,
+        channelCount: 1,
+        echoCancellation: true,
+        noiseSuppression: true
+      }
+    })
+
+    // 2. 初始化音频上下文
+    audioContext = new AudioContext({ sampleRate: 24000 })
+
+    // 3. 连接 WebSocket
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    // 使用结构化面试 WebSocket 端点，支持7阶段状态机
+    const wsUrl = `${wsProtocol}//${window.location.host}/ws/structured-interview/${token.value}`
+    console.log('Connecting to:', wsUrl)
+
+    ws = new WebSocket(wsUrl)
+
+    ws.onopen = () => {
+      console.log('WebSocket connected')
+      // Send init message with resume and job info
+      ws.send(JSON.stringify({
+        type: 'init',
+        resume_id: localStorage.getItem('resume_id') || '',
+        jd_id: localStorage.getItem('jd_id') || '',
+        resume_summary: localStorage.getItem('resume_summary') || '候选人',
+        job_info: localStorage.getItem('job_info') || '技术岗位'
+      }))
+      isConnecting.value = false
+      isStarted.value = true
+      startDurationTimer()
+      startPingTimer()
+      startAudioCapture()
+    }
+
+    ws.onmessage = (event) => {
+      handleWebSocketMessage(event.data)
+    }
+
+    ws.onerror = (error) => {
+      console.error('WebSocket error:', error)
+      connectionError.value = '连接失败，请重试'
+      isConnecting.value = false
+    }
+
+    ws.onclose = (event) => {
+      console.log('WebSocket closed:', event.code, event.reason)
+      if (isStarted.value && interviewStatus.value !== 'stopped') {
+        connectionError.value = '连接已断开'
+        interviewStatus.value = 'stopped'
+      }
+    }
+
+  } catch (error: any) {
+    console.error('Start error:', error)
+    connectionError.value = error.message || '启动失败'
+    isConnecting.value = false
+  }
+}
+
+// 处理 WebSocket 消息
+const handleWebSocketMessage = (data: string) => {
+  try {
+    const message = JSON.parse(data)
+    console.log('WS message:', message.type)
+
+    switch (message.type) {
+      case 'status':
+        handleStatusChange(message.status)
+        break
+
+      case 'transcript':
+        handleTranscript(message.text, message.is_final)
+        break
+
+      case 'response_text':
+        handleResponseText(message.text)
+        break
+
+      case 'audio':
+        handleAudio(message.audio)
+        break
+
+      case 'phase_start':
+      case 'phase_change':
+        handlePhaseChange(message)
+        break
+
+      case 'interview_end':
+        handleInterviewEnd(message)
+        break
+
+      case 'end':
+        handleEnd(message.reason)
+        break
+
+      case 'error':
+        handleError(message.message)
+        break
+
+      case 'pong':
+        // 心跳响应
+        break
+    }
+  } catch (e) {
+    console.error('Parse message error:', e)
+  }
+}
+
+// 启动录音计时器（仅用于显示录音时长，无时间限制）
+const startRecordingTimer = () => {
+  stopRecordingTimer()
+  recordingTime.value = 0
+  recordingTimer = window.setInterval(() => {
+    recordingTime.value++
+  }, 1000)
+}
+
+// 停止录音计时器
+const stopRecordingTimer = () => {
+  if (recordingTimer) {
+    clearInterval(recordingTimer)
+    recordingTimer = null
+  }
+  recordingTime.value = 0
+}
+
+// 处理状态变化
+const handleStatusChange = (status: string) => {
+  console.log('Status changed to:', status)
+
+  if (status === 'listening') {
+    // AI说完了，检查是否还有音频在播放
+    if (!isPlayingAudio) {
+      interviewStatus.value = 'listening'
+      // 启动录音计时器
+      startRecordingTimer()
+      // 完成AI响应消息
+      if (currentResponse.value) {
+        messages.value.push({
+          id: Date.now().toString(),
+          role: 'assistant',
+          content: currentResponse.value,
+          timestamp: new Date().toISOString()
+        })
+        currentResponse.value = ''
+        scrollToBottom()
+      }
+    }
+  } else if (status === 'processing') {
+    interviewStatus.value = 'processing'
+    stopRecordingTimer()
+  } else if (status === 'speaking') {
+    interviewStatus.value = 'speaking'
+    stopRecordingTimer()
+  } else if (status === 'stopped') {
+    interviewStatus.value = 'stopped'
+    stopRecordingTimer()
+  }
+}
+
+// 处理转录
+const handleTranscript = (text: string, isFinal: boolean) => {
+  if (isFinal) {
+    // 完成用户消息
+    messages.value.push({
+      id: Date.now().toString(),
+      role: 'user',
+      content: text,
+      timestamp: new Date().toISOString()
+    })
+    currentTranscript.value = ''
+    scrollToBottom()
+  } else {
+    currentTranscript.value = text
+  }
+}
+
+// 处理响应文本
+const handleResponseText = (text: string) => {
+  // 收到面试官文字时，立即切换到 speaking 状态
+  if (interviewStatus.value === 'listening') {
+    interviewStatus.value = 'speaking'
+    stopRecordingTimer()
+  }
+
+  // 如果是新的响应（上一个已经被加入消息列表），直接设置
+  // 否则累加（支持流式响应）
+  if (currentResponse.value === '') {
+    currentResponse.value = text
+  } else {
+    currentResponse.value += text
+  }
+  scrollToBottom()
+}
+
+// 处理音频（延迟播放，累积更多数据）
+let audioPlaybackTimer: number | null = null
+const AUDIO_BUFFER_DELAY = 200 // 等待200ms累积音频
+
+const handleAudio = (audioBase64: string) => {
+  try {
+    // 收到面试官音频时，立即切换到 speaking 状态（防止延迟导致继续采集）
+    if (interviewStatus.value === 'listening') {
+      interviewStatus.value = 'speaking'
+      stopRecordingTimer()
+    }
+
+    const binaryString = atob(audioBase64)
+    const bytes = new Uint8Array(binaryString.length)
+    for (let i = 0; i < binaryString.length; i++) {
+      bytes[i] = binaryString.charCodeAt(i)
+    }
+    audioQueue.push(bytes.buffer)
+
+    // 延迟播放，等待累积更多音频数据
+    if (audioPlaybackTimer) {
+      clearTimeout(audioPlaybackTimer)
+    }
+    audioPlaybackTimer = window.setTimeout(() => {
+      audioPlaybackTimer = null
+      playNextAudio()
+    }, AUDIO_BUFFER_DELAY)
+  } catch (e) {
+    console.error('Audio decode error:', e)
+  }
+}
+
+// 播放音频队列（累积后播放，减少断续）
+const playNextAudio = async () => {
+  if (isPlayingAudio || audioQueue.length === 0 || !audioContext) return
+
+  isPlayingAudio = true
+
+  // 合并所有待播放的音频块
+  const allBuffers: Int16Array[] = []
+  while (audioQueue.length > 0) {
+    const buffer = audioQueue.shift()!
+    allBuffers.push(new Int16Array(buffer))
+  }
+
+  if (allBuffers.length === 0) {
+    isPlayingAudio = false
+    return
+  }
+
+  try {
+    // 计算总长度
+    const totalLength = allBuffers.reduce((sum, arr) => sum + arr.length, 0)
+    const mergedInt16 = new Int16Array(totalLength)
+
+    // 合并
+    let offset = 0
+    for (const arr of allBuffers) {
+      mergedInt16.set(arr, offset)
+      offset += arr.length
+    }
+
+    // PCM 16-bit -> Float32
+    const float32 = new Float32Array(mergedInt16.length)
+    for (let i = 0; i < mergedInt16.length; i++) {
+      float32[i] = (mergedInt16[i] ?? 0) / 32768
+    }
+
+    // 添加淡入淡出以减少爆音 (fade 50 samples ≈ 2ms @ 24kHz)
+    const fadeLength = Math.min(50, Math.floor(float32.length / 4))
+    for (let i = 0; i < fadeLength; i++) {
+      const factor = i / fadeLength
+      const startVal = float32[i]
+      const endVal = float32[float32.length - 1 - i]
+      if (startVal !== undefined) float32[i] = startVal * factor
+      if (endVal !== undefined) float32[float32.length - 1 - i] = endVal * factor
+    }
+
+    // 创建专用的播放 AudioContext（确保采样率正确）
+    const playbackContext = new AudioContext({ sampleRate: 24000 })
+    const audioBuffer = playbackContext.createBuffer(1, float32.length, 24000)
+    audioBuffer.getChannelData(0).set(float32)
+
+    // 播放
+    const source = playbackContext.createBufferSource()
+    source.buffer = audioBuffer
+    source.connect(playbackContext.destination)
+
+    await new Promise<void>((resolve) => {
+      source.onended = async () => {
+        await playbackContext.close()
+        resolve()
+      }
+      source.start()
+    })
+  } catch (e) {
+    console.error('Play audio error:', e)
+  }
+
+  isPlayingAudio = false
+
+  // 如果还有新的音频数据，继续播放
+  if (audioQueue.length > 0) {
+    playNextAudio()
+    return
+  }
+
+  // 播放完成后，如果状态应该是listening，更新状态
+  if (interviewStatus.value === 'speaking') {
+    interviewStatus.value = 'listening'
+    // 启动录音计时器
+    startRecordingTimer()
+    // 完成AI响应消息
+    if (currentResponse.value) {
+      messages.value.push({
+        id: Date.now().toString(),
+        role: 'assistant',
+        content: currentResponse.value,
+        timestamp: new Date().toISOString()
+      })
+      currentResponse.value = ''
+      scrollToBottom()
+    }
+  }
+}
+
+// 处理结束
+const handleEnd = (reason: string) => {
+  interviewStatus.value = 'stopped'
+  stopAudioCapture()
+  alert(`面试结束: ${reason}`)
+}
+
+// 处理错误
+const handleError = (message: string) => {
+  console.error('Server error:', message)
+  connectionError.value = message
+}
+
+// 处理阶段变化
+const handlePhaseChange = (message: any) => {
+  currentPhase.value = message.phase
+  phaseDescription.value = message.description || phaseNames[message.phase] || message.phase
+  currentRound.value = message.round || 0
+  maxRounds.value = message.max_rounds || 1
+
+  // Add system message about phase change
+  messages.value.push({
+    id: Date.now().toString(),
+    role: 'system',
+    content: `--- ${phaseDescription.value} ---`,
+    timestamp: new Date().toISOString()
+  })
+  scrollToBottom()
+}
+
+// 处理面试结束
+const handleInterviewEnd = (message: any) => {
+  interviewStatus.value = 'stopped'
+  if (message.evaluation) {
+    const score = message.evaluation.overall_score
+    const recommendation = message.evaluation.recommendation
+    messages.value.push({
+      id: Date.now().toString(),
+      role: 'system',
+      content: `面试结束！评分: ${score}/100, 推荐等级: ${recommendation}`,
+      timestamp: new Date().toISOString()
+    })
+  }
+  scrollToBottom()
+}
+
+// 启动音频采集
+const startAudioCapture = async () => {
+  if (!mediaStream || !audioContext) {
+    console.error('No mediaStream or audioContext')
+    return
+  }
+
+  console.log('Starting audio capture, sampleRate:', audioContext.sampleRate)
+
+  // 直接使用 ScriptProcessor（更可靠）
+  startAudioCaptureWithScriptProcessor()
+}
+
+// ScriptProcessorNode 音频采集
+let scriptProcessor: ScriptProcessorNode | null = null
+
+const startAudioCaptureWithScriptProcessor = () => {
+  if (!mediaStream || !audioContext) {
+    console.error('Cannot start audio capture: no mediaStream or audioContext')
+    return
+  }
+
+  try {
+    const source = audioContext.createMediaStreamSource(mediaStream)
+    scriptProcessor = audioContext.createScriptProcessor(4096, 1, 1)
+
+    // 重采样参数
+    let resampleBuffer: number[] = []
+    const inputRate = audioContext.sampleRate
+    const outputRate = 16000
+    const ratio = inputRate / outputRate
+
+    console.log(`Audio capture: inputRate=${inputRate}, outputRate=${outputRate}, ratio=${ratio}`)
+
+    scriptProcessor.onaudioprocess = (e) => {
+      // 只在 listening 状态才处理音频（面试官说话时不采集）
+      if (interviewStatus.value !== 'listening') {
+        // 清空缓冲区，避免积累
+        resampleBuffer = []
+        volumeLevel.value = 0
+        return
+      }
+
+      const input = e.inputBuffer.getChannelData(0)
+
+      // 计算音量 (RMS)
+      let sum = 0
+      for (let i = 0; i < input.length; i++) {
+        sum += (input[i] ?? 0) * (input[i] ?? 0)
+      }
+      const rms = Math.sqrt(sum / input.length)
+      volumeLevel.value = Math.min(100, rms * 500) // 放大显示
+
+      // 累积到重采样缓冲
+      for (let i = 0; i < input.length; i++) {
+        resampleBuffer.push(input[i] ?? 0)
+      }
+
+      // 检查 WebSocket 状态
+      if (ws?.readyState !== WebSocket.OPEN) {
+        return
+      }
+
+      // 每收集够一定量的数据就发送
+      const outputSamples = Math.floor(resampleBuffer.length / ratio)
+      if (outputSamples >= 320) { // 20ms @ 16kHz
+        const output = new Int16Array(outputSamples)
+        for (let i = 0; i < outputSamples; i++) {
+          const idx = Math.floor(i * ratio)
+          const sample = resampleBuffer[idx] || 0
+          output[i] = Math.max(-32768, Math.min(32767, Math.floor(sample * 32767)))
+        }
+
+        // 发送音频数据
+        try {
+          const bytes = new Uint8Array(output.buffer)
+          let binary = ''
+          for (let i = 0; i < bytes.length; i++) {
+            binary += String.fromCharCode(bytes[i] ?? 0)
+          }
+          const base64 = btoa(binary)
+
+          ws.send(JSON.stringify({
+            type: 'audio',
+            audio: base64
+          }))
+
+          audioFrameCount.value++
+        } catch (err) {
+          console.error('Send audio error:', err)
+        }
+
+        // 清空已处理的缓冲
+        resampleBuffer = resampleBuffer.slice(Math.floor(outputSamples * ratio))
+      }
+    }
+
+    // 连接节点 - 注意：不要连接到 destination，避免回声
+    source.connect(scriptProcessor)
+    // 创建一个静音的目标节点来保持处理器活跃
+    const silentGain = audioContext.createGain()
+    silentGain.gain.value = 0
+    scriptProcessor.connect(silentGain)
+    silentGain.connect(audioContext.destination)
+
+    console.log('Audio capture started successfully')
+  } catch (err) {
+    console.error('Failed to start audio capture:', err)
+    connectionError.value = '音频采集启动失败'
+  }
+}
+
+// 停止音频采集
+const stopAudioCapture = () => {
+  if (scriptProcessor) {
+    scriptProcessor.disconnect()
+    scriptProcessor = null
+  }
+  if (audioWorkletNode) {
+    audioWorkletNode.disconnect()
+    audioWorkletNode = null
+  }
+  if (mediaStream) {
+    mediaStream.getTracks().forEach(track => track.stop())
+    mediaStream = null
+  }
+  volumeLevel.value = 0
+  audioFrameCount.value = 0
+}
+
+// 手动提交音频（说完了）
+const commitAudio = () => {
+  if (ws?.readyState === WebSocket.OPEN && interviewStatus.value === 'listening') {
+    console.log('Committing audio...')
+    ws.send(JSON.stringify({
+      type: 'control',
+      action: 'commit'
+    }))
+    interviewStatus.value = 'processing'
+  }
+}
+
+// 结束面试
+const endInterview = () => {
+  if (!confirm('确定要结束面试吗？')) return
+
+  if (ws?.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({
+      type: 'control',
+      action: 'stop'
+    }))
+  }
+
+  interviewStatus.value = 'stopped'
+  stopAudioCapture()
+}
+
+// 计时器
+const startDurationTimer = () => {
+  durationTimer = window.setInterval(() => {
+    duration.value++
+  }, 1000)
+}
+
+const startPingTimer = () => {
+  pingTimer = window.setInterval(() => {
+    if (ws?.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'ping' }))
+    }
+  }, 30000)
+}
+
+onMounted(() => {
+  // 初始化
+})
+
+onUnmounted(() => {
+  if (durationTimer) clearInterval(durationTimer)
+  if (pingTimer) clearInterval(pingTimer)
+  stopRecordingTimer()
+  stopAudioCapture()
+  if (ws) {
+    ws.close()
+    ws = null
+  }
+  if (audioContext) {
+    audioContext.close()
+    audioContext = null
+  }
+})
+</script>
+
+<style scoped>
+/* 声波动画 */
+.sound-wave {
+  animation: soundWave 0.5s ease-in-out infinite alternate;
+}
+
+@keyframes soundWave {
+  0% {
+    height: 4px;
+  }
+  100% {
+    height: 24px;
+  }
+}
+
+/* 滚动条美化 */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.1);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.2);
+}
+</style>
