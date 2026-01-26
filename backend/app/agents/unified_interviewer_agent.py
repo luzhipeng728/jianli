@@ -14,11 +14,13 @@ class UnifiedInterviewerAgent:
         self,
         session_id: str,
         resume_summary: str,
-        job_info: str
+        job_info: str,
+        written_test_summary: str = ""
     ):
         self.session_id = session_id
         self.resume_summary = resume_summary
         self.job_info = job_info
+        self.written_test_summary = written_test_summary
         self.llm = LLMClient()
 
     def _build_system_prompt(
@@ -30,6 +32,14 @@ class UnifiedInterviewerAgent:
         """Build phase-specific system prompt"""
 
         phase_config = PHASE_CONFIGS[phase]
+
+        # 笔试结果信息（如果有）
+        written_test_section = ""
+        if self.written_test_summary:
+            written_test_section = f"""
+## 候选人笔试表现
+{self.written_test_summary}
+"""
 
         base_prompt = f"""你是一位专业的技术面试官，正在进行语音面试。
 
@@ -43,7 +53,7 @@ class UnifiedInterviewerAgent:
 
 ## 岗位信息
 {self.job_info}
-
+{written_test_section}
 ## 当前阶段
 - 阶段：{phase_config.description}
 - 当前轮次：{round_number + 1} / {phase_config.max_rounds}
@@ -56,6 +66,7 @@ class UnifiedInterviewerAgent:
 ## 本阶段任务
 - 友好问候候选人
 - 简单介绍自己和面试流程
+- 如果有笔试成绩，先简单评价一下笔试表现（比如"看到你笔试成绩还不错"或"笔试有些题目答错了，待会我们可以聊聊"）
 - 让候选人放松""",
 
             InterviewPhase.SELF_INTRO: """
@@ -165,6 +176,14 @@ class UnifiedInterviewerAgent:
 
     def check_advance_signal(self, response: str) -> tuple[str, bool]:
         """Check if response contains advance phase signal"""
-        if "[ADVANCE_PHASE]" in response:
-            return response.replace("[ADVANCE_PHASE]", "").strip(), True
-        return response, False
+        should_advance = False
+        cleaned = response
+
+        # 支持多种标记格式
+        advance_markers = ["[ADVANCE_PHASE]", "[ADVANCE]", "【ADVANCE】", "[advance]"]
+        for marker in advance_markers:
+            if marker in cleaned:
+                cleaned = cleaned.replace(marker, "")
+                should_advance = True
+
+        return cleaned.strip(), should_advance

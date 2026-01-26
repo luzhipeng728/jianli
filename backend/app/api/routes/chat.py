@@ -36,7 +36,8 @@ async def chat_message(request: ChatRequest):
         async for chunk in engine.chat_stream(
             request.session_id,
             request.message,
-            request.show_thinking
+            request.show_thinking,
+            request.jd_id
         ):
             data = chunk.model_dump_json()
             yield f"data: {data}\n\n"

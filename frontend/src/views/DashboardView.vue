@@ -173,16 +173,19 @@ const recentActivities = ref<Activity[]>([])
 
 onMounted(async () => {
   try {
-    // Fetch resume count
-    const result = await request.get('/api/resume/list')
+    // Fetch stats from backend
+    const statsResult = await request.get<any, Stats>('/api/resume/stats')
+    if (statsResult) {
+      stats.value.totalResumes = statsResult.totalResumes || 0
+      stats.value.todayParsed = statsResult.todayParsed || 0
+      stats.value.chatCount = statsResult.chatCount || 0
+      stats.value.avgResponseTime = statsResult.avgResponseTime || 800
+    }
+
+    // Fetch recent resumes for activity list
+    const result = await request.get<any, { data: any[], total: number }>('/api/resume/list')
     const resumes = result?.data || []
     if (Array.isArray(resumes)) {
-      stats.value.totalResumes = resumes.length
-      stats.value.todayParsed = resumes.filter((r: any) => {
-        const today = new Date().toDateString()
-        return new Date(r.created_at).toDateString() === today
-      }).length
-
       // Convert to recent activities
       recentActivities.value = resumes.slice(0, 5).map((r: any) => ({
         type: 'upload' as const,

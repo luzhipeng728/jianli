@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Optional, Literal
+from typing import Optional, Literal, Any
 from datetime import datetime
 
 class ChatMessage(BaseModel):
@@ -16,12 +16,13 @@ class ChatRequest(BaseModel):
     session_id: Optional[str] = None
     message: str
     show_thinking: bool = False
+    jd_id: Optional[str] = None  # 筛选特定岗位的候选人
 
 class StreamChunk(BaseModel):
     type: Literal["thinking", "text", "card", "done", "error"]
     content: str = ""
     card_type: Optional[str] = None
-    data: Optional[dict] = None
+    data: Optional[Any] = None  # dict for comparison/stats, list for candidates
     metrics: Optional[dict] = None
 
 class KnowledgeItem(BaseModel):

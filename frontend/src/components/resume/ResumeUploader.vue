@@ -52,26 +52,75 @@
       </div>
     </div>
 
-    <!-- Loading State -->
-    <div v-if="isUploading" class="absolute inset-0 bg-white/90 flex items-center justify-center rounded-xl">
-      <div class="flex flex-col items-center gap-3">
-        <div class="w-10 h-10 border-3 border-primary-200 border-t-primary-600 rounded-full animate-spin"></div>
-        <p class="text-sm font-medium text-secondary-600">正在解析简历...</p>
+    <!-- Loading State with Progress -->
+    <div v-if="isUploading" class="absolute inset-0 bg-white/98 flex items-center justify-center rounded-xl overflow-hidden">
+      <div class="flex flex-col items-center gap-4 w-full max-w-xs px-6">
+        <!-- Progress Circle -->
+        <div class="relative w-16 h-16">
+          <svg class="w-16 h-16 transform -rotate-90">
+            <circle cx="32" cy="32" r="28" stroke="currentColor" stroke-width="3" fill="none" class="text-secondary-100" />
+            <circle cx="32" cy="32" r="28" stroke="currentColor" stroke-width="3" fill="none" class="text-primary-500"
+              :stroke-dasharray="175.93" :stroke-dashoffset="175.93 * (1 - progress / 100)" stroke-linecap="round" />
+          </svg>
+          <div class="absolute inset-0 flex items-center justify-center">
+            <span class="text-sm font-bold text-primary-600">{{ progress }}%</span>
+          </div>
+        </div>
+
+        <!-- Progress Text -->
+        <p class="text-sm font-medium text-secondary-700 text-center">{{ progressMessage }}</p>
+
+        <!-- Progress Bar -->
+        <div class="w-full h-1.5 bg-secondary-100 rounded-full overflow-hidden">
+          <div class="h-full bg-gradient-to-r from-primary-400 to-primary-600 transition-all duration-300 ease-out rounded-full"
+            :style="{ width: `${progress}%` }"></div>
+        </div>
       </div>
     </div>
+
+    <!-- LLM Output Toast (Top Right) -->
+    <Teleport to="body">
+      <Transition name="slide-fade">
+        <div v-if="isParsing && llmOutput" class="fixed top-4 right-4 z-50 w-96 max-w-[calc(100vw-2rem)]">
+          <div class="bg-white rounded-xl shadow-2xl border border-secondary-100 overflow-hidden">
+            <div class="px-4 py-2 bg-primary-50 border-b border-primary-100 flex items-center gap-2">
+              <div class="w-2 h-2 rounded-full bg-primary-500 animate-pulse"></div>
+              <span class="text-sm font-medium text-primary-700">AI 正在解析</span>
+            </div>
+            <div class="p-3 max-h-64 overflow-y-auto" ref="llmOutputRef">
+              <pre class="text-xs text-secondary-600 whitespace-pre-wrap font-mono leading-relaxed">{{ llmOutput }}</pre>
+            </div>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
-import { uploadResume } from '@/api/resume'
+import { uploadResumeStream } from '@/api/resume'
 
 const emit = defineEmits(['success'])
 
 const fileInput = ref<HTMLInputElement | null>(null)
 const isDragging = ref(false)
 const isUploading = ref(false)
+const progress = ref(0)
+const progressMessage = ref('准备上传...')
+const isParsing = ref(false)
+const llmOutput = ref('')
+const llmOutputRef = ref<HTMLElement | null>(null)
+
+// Auto-scroll to bottom when new content arrives
+const scrollToBottom = () => {
+  nextTick(() => {
+    if (llmOutputRef.value) {
+      llmOutputRef.value.scrollTop = llmOutputRef.value.scrollHeight
+    }
+  })
+}
 
 const triggerFileInput = () => {
   fileInput.value?.click()
@@ -102,20 +151,45 @@ const processFile = async (file: File) => {
   }
 
   isUploading.value = true
+  progress.value = 0
+  progressMessage.value = '准备上传...'
+  isParsing.value = false
+  llmOutput.value = ''
 
   try {
-    const result = await uploadResume(file)
+    for await (const chunk of uploadResumeStream(file)) {
+      progress.value = chunk.progress
 
-    if (result.status === 'success') {
-      ElMessage.success('解析成功')
-      emit('success', result.data)
-    } else {
-      ElMessage.error(result.error || '解析失败')
+      // 处理 LLM 流式输出
+      if (chunk.type === 'llm_chunk') {
+        isParsing.value = true
+        llmOutput.value += chunk.content || ''
+        scrollToBottom()
+      } else if (chunk.message) {
+        progressMessage.value = chunk.message
+        if (chunk.parsing) {
+          isParsing.value = true
+        }
+      }
+
+      // 处理最终结果
+      if (chunk.result) {
+        isParsing.value = false
+        if (chunk.result.status === 'success') {
+          ElMessage.success('解析成功')
+          emit('success', chunk.result.data)
+        } else {
+          ElMessage.error(chunk.result.error || '解析失败')
+        }
+      }
     }
   } catch (e) {
     ElMessage.error('上传失败')
   } finally {
     isUploading.value = false
+    isParsing.value = false
+    progress.value = 0
+    llmOutput.value = ''
   }
 }
 </script>
@@ -146,5 +220,33 @@ const processFile = async (file: File) => {
 @keyframes spin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
+}
+
+/* Toast slide-fade transition */
+.slide-fade-enter-active {
+  transition: all 0.3s ease-out;
+}
+
+.slide-fade-leave-active {
+  transition: all 0.2s ease-in;
+}
+
+.slide-fade-enter-from {
+  transform: translateX(100%);
+  opacity: 0;
+}
+
+.slide-fade-leave-to {
+  transform: translateX(100%);
+  opacity: 0;
+}
+
+.animate-pulse {
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
 }
 </style>

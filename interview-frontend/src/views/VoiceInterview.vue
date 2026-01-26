@@ -156,6 +156,19 @@
                 </p>
                 <p v-else class="text-sm text-gray-500 mt-2">等待您的回答</p>
               </div>
+
+              <!-- 跳过按钮 - 面试官说话时显示 -->
+              <button
+                v-if="interviewStatus === 'speaking'"
+                @click="skipAudio"
+                class="flex-shrink-0 px-5 py-2.5 bg-orange-500 hover:bg-orange-600 text-white font-medium rounded-xl shadow-lg hover:shadow-xl transition-all duration-200 flex items-center space-x-2 animate-pulse"
+                title="跳过当前语音"
+              >
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 5l7 7-7 7M5 5l7 7-7 7"></path>
+                </svg>
+                <span>跳过语音</span>
+              </button>
             </div>
           </div>
         </div>
@@ -164,8 +177,37 @@
         <div class="flex-1 min-h-0 mb-4">
           <div class="h-full bg-white/70 backdrop-blur-xl rounded-2xl border border-white/50 shadow-lg overflow-hidden">
             <div ref="messagesContainer" class="h-full overflow-y-auto p-4 space-y-3">
-              <!-- 空状态 -->
-              <div v-if="messages.length === 0" class="h-full flex items-center justify-center">
+              <!-- 分析进度显示 -->
+              <div v-if="interviewStatus === 'analyzing'" class="h-full flex items-center justify-center p-4">
+                <div class="w-full max-w-md">
+                  <div class="bg-gradient-to-br from-purple-50 to-indigo-50 rounded-2xl p-6 border border-purple-100">
+                    <!-- 动画图标 -->
+                    <div class="flex justify-center mb-4">
+                      <div class="relative">
+                        <div class="w-16 h-16 rounded-full bg-gradient-to-br from-purple-500 to-indigo-600 flex items-center justify-center">
+                          <svg class="w-8 h-8 text-white animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"></path>
+                          </svg>
+                        </div>
+                        <div class="absolute inset-0 rounded-full border-4 border-purple-300 animate-ping opacity-30"></div>
+                      </div>
+                    </div>
+
+                    <h3 class="text-center text-lg font-semibold text-gray-800 mb-4">AI 正在准备面试</h3>
+
+                    <!-- 分析进度文字 -->
+                    <div ref="analysisProgressContainer" class="bg-white rounded-xl p-4 min-h-[120px] max-h-[200px] overflow-y-auto text-sm text-gray-600 whitespace-pre-wrap font-mono">
+                      {{ analysisProgress || '正在初始化...' }}
+                      <span class="inline-block w-2 h-4 bg-purple-500 animate-pulse ml-1"></span>
+                    </div>
+
+                    <p class="text-center text-xs text-gray-400 mt-4">正在分析岗位需求和候选人背景，生成针对性问题...</p>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 空状态 (不在分析中且没有消息时显示) -->
+              <div v-else-if="messages.length === 0 && !isAnalyzing" class="h-full flex items-center justify-center">
                 <div class="text-center text-gray-400">
                   <svg class="w-12 h-12 mx-auto mb-3 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"></path>
@@ -293,7 +335,8 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
+import { interviewApi } from '../api/interview'
 
 interface Message {
   id: string
@@ -303,16 +346,19 @@ interface Message {
 }
 
 const route = useRoute()
+const router = useRouter()
 
 // 状态
 const isStarted = ref(false)
 const isConnecting = ref(false)
 const connectionError = ref('')
-const interviewStatus = ref<'listening' | 'processing' | 'speaking' | 'stopped'>('listening')
+// interviewStatus includes 'analyzing' for the JD analysis phase before interview starts
+const interviewStatus = ref<'listening' | 'processing' | 'speaking' | 'stopped' | 'analyzing'>('stopped')
 const messages = ref<Message[]>([])
 const duration = ref(0)
 const currentTranscript = ref('')
 const currentResponse = ref('')
+const analysisProgress = ref('')  // 分析进度文字
 const volumeLevel = ref(0)
 const audioFrameCount = ref(0)
 
@@ -338,6 +384,7 @@ let recordingTimer: number | null = null
 
 // DOM引用
 const messagesContainer = ref<HTMLElement>()
+const analysisProgressContainer = ref<HTMLElement>()
 
 // 计时器
 let durationTimer: number | null = null
@@ -353,10 +400,20 @@ let audioWorkletNode: AudioWorkletNode | null = null
 let audioQueue: ArrayBuffer[] = []
 let isPlayingAudio = false
 
+// 流式音频播放相关
+let playbackContext: AudioContext | null = null
+let nextPlayTime = 0  // 下一个音频块的播放时间
+let isStreamingPlayback = false  // 是否正在流式播放
+const MIN_BUFFER_SIZE = 4800  // 最小缓冲 (0.2秒 @ 24kHz)
+
 const token = computed(() => route.params.token as string)
+
+// 是否在分析中
+const isAnalyzing = computed(() => interviewStatus.value === 'analyzing')
 
 // 状态显示
 const statusText = computed(() => {
+  if (interviewStatus.value === 'analyzing') return '准备面试中...'
   if (interviewStatus.value === 'speaking') return '面试官提问中'
   if (interviewStatus.value === 'processing') return '处理中'
   if (interviewStatus.value === 'stopped') return '已结束'
@@ -364,6 +421,7 @@ const statusText = computed(() => {
 })
 
 const statusBadgeClass = computed(() => {
+  if (interviewStatus.value === 'analyzing') return 'bg-purple-100 text-purple-700'
   if (interviewStatus.value === 'speaking') return 'bg-blue-100 text-blue-700'
   if (interviewStatus.value === 'processing') return 'bg-yellow-100 text-yellow-700'
   if (interviewStatus.value === 'stopped') return 'bg-gray-100 text-gray-700'
@@ -371,24 +429,28 @@ const statusBadgeClass = computed(() => {
 })
 
 const aiStatusText = computed(() => {
+  if (interviewStatus.value === 'analyzing') return '准备问题'
   if (interviewStatus.value === 'speaking') return '正在说话'
   if (interviewStatus.value === 'processing') return '思考中'
   return '等待中'
 })
 
 const aiStatusBadgeClass = computed(() => {
+  if (interviewStatus.value === 'analyzing') return 'bg-purple-100 text-purple-600'
   if (interviewStatus.value === 'speaking') return 'bg-blue-100 text-blue-600'
   if (interviewStatus.value === 'processing') return 'bg-yellow-100 text-yellow-600'
   return 'bg-gray-100 text-gray-500'
 })
 
 const micStatusClass = computed(() => {
+  if (interviewStatus.value === 'analyzing') return 'bg-purple-400'
   if (interviewStatus.value === 'speaking') return 'bg-gray-400'
   if (interviewStatus.value === 'processing') return 'bg-yellow-500'
   return 'bg-green-500 animate-pulse'
 })
 
 const userStatusText = computed(() => {
+  if (interviewStatus.value === 'analyzing') return 'AI 正在准备面试问题...'
   if (interviewStatus.value === 'speaking') return '请聆听面试官...'
   if (interviewStatus.value === 'processing') return '正在处理您的回答...'
   if (interviewStatus.value === 'stopped') return '面试已结束'
@@ -396,6 +458,7 @@ const userStatusText = computed(() => {
 })
 
 const statusTextClass = computed(() => {
+  if (interviewStatus.value === 'analyzing') return 'text-purple-600'
   if (interviewStatus.value === 'speaking') return 'text-blue-600'
   if (interviewStatus.value === 'processing') return 'text-yellow-600'
   if (interviewStatus.value === 'stopped') return 'text-gray-500'
@@ -403,6 +466,7 @@ const statusTextClass = computed(() => {
 })
 
 const sendButtonText = computed(() => {
+  if (interviewStatus.value === 'analyzing') return '准备中'
   if (interviewStatus.value === 'speaking') return '聆听中'
   if (interviewStatus.value === 'processing') return '处理中'
   return '发送回答'
@@ -433,12 +497,50 @@ const scrollToBottom = async () => {
   }
 }
 
+// 滚动分析进度到底部
+const scrollAnalysisToBottom = async () => {
+  await nextTick()
+  if (analysisProgressContainer.value) {
+    analysisProgressContainer.value.scrollTop = analysisProgressContainer.value.scrollHeight
+  }
+}
+
+// 会话数据
+const sessionData = ref<{
+  resume_id?: string
+  jd_id?: string
+  resume_summary?: string
+  job_info?: string
+  position_name?: string
+  written_test_summary?: string
+}>({})
+
 // 开始面试
 const startInterview = async () => {
   isConnecting.value = true
   connectionError.value = ''
 
   try {
+    // 0. 先获取会话数据
+    try {
+      const response = await interviewApi.getSession(token.value)
+      sessionData.value = {
+        resume_id: response.data.resume_id,
+        jd_id: response.data.jd_id,
+        resume_summary: response.data.resume_summary || `候选人: ${response.data.candidate_name || '未知'}`,
+        job_info: response.data.job_info || `职位: ${response.data.position || '技术岗位'}`,
+        position_name: response.data.position || '技术岗位',
+        written_test_summary: response.data.written_test_summary || ''
+      }
+      console.log('Resume summary:', sessionData.value.resume_summary)
+      console.log('Job info:', sessionData.value.job_info)
+      console.log('Position name:', sessionData.value.position_name)
+      console.log('Written test summary:', sessionData.value.written_test_summary)
+      console.log('Session data loaded:', sessionData.value)
+    } catch (e) {
+      console.warn('Failed to load session data, using defaults')
+    }
+
     // 1. 请求麦克风权限
     mediaStream = await navigator.mediaDevices.getUserMedia({
       audio: {
@@ -462,19 +564,23 @@ const startInterview = async () => {
 
     ws.onopen = () => {
       console.log('WebSocket connected')
-      // Send init message with resume and job info
-      ws.send(JSON.stringify({
+      // Send init message with resume, job info and written test summary from session data
+      ws?.send(JSON.stringify({
         type: 'init',
-        resume_id: localStorage.getItem('resume_id') || '',
-        jd_id: localStorage.getItem('jd_id') || '',
-        resume_summary: localStorage.getItem('resume_summary') || '候选人',
-        job_info: localStorage.getItem('job_info') || '技术岗位'
+        resume_id: sessionData.value.resume_id || '',
+        jd_id: sessionData.value.jd_id || '',
+        resume_summary: sessionData.value.resume_summary || '候选人',
+        job_info: sessionData.value.job_info || '技术岗位',
+        position_name: sessionData.value.position_name || '技术岗位',
+        written_test_summary: sessionData.value.written_test_summary || ''
       }))
       isConnecting.value = false
       isStarted.value = true
       startDurationTimer()
       startPingTimer()
-      startAudioCapture()
+      // 【重要】不在这里启动音频采集，等分析完成后再启动
+      // Audio capture will be started after analysis_complete is received
+      console.log('[Audio] Not starting audio capture yet - waiting for analysis to complete')
     }
 
     ws.onmessage = (event) => {
@@ -506,7 +612,7 @@ const startInterview = async () => {
 const handleWebSocketMessage = (data: string) => {
   try {
     const message = JSON.parse(data)
-    console.log('WS message:', message.type)
+    console.log('[WS] Received message:', message.type, message.text?.substring(0, 50) || '')
 
     switch (message.type) {
       case 'status':
@@ -530,8 +636,25 @@ const handleWebSocketMessage = (data: string) => {
         handlePhaseChange(message)
         break
 
+      case 'round_update':
+        handleRoundUpdate(message)
+        break
+
+      case 'analysis_progress':
+        handleAnalysisProgress(message.text)
+        break
+
+      case 'analysis_complete':
+        handleAnalysisComplete()
+        break
+
       case 'interview_end':
         handleInterviewEnd(message)
+        break
+
+      case 'audio_complete':
+        // 后端音频流发送完成，等待前端播放完毕后切换到 listening
+        handleAudioComplete()
         break
 
       case 'end':
@@ -569,37 +692,127 @@ const stopRecordingTimer = () => {
   recordingTime.value = 0
 }
 
+// 等待切换到 listening 的标志（后端发来 listening 但音频还在播放）
+let pendingListeningStatus = false
+
+// 处理分析进度
+const handleAnalysisProgress = (text: string) => {
+  console.log('[Analysis] Progress:', text)
+  analysisProgress.value += text
+  // 滚动分析进度容器到底部
+  scrollAnalysisToBottom()
+}
+
+// 处理分析完成
+const handleAnalysisComplete = () => {
+  console.log('[Analysis] Complete, starting audio capture')
+  // 分析完成后启动音频采集
+  startAudioCapture()
+  // analysisProgress 保留显示，等面试开始后再清除
+}
+
 // 处理状态变化
 const handleStatusChange = (status: string) => {
   console.log('Status changed to:', status)
 
-  if (status === 'listening') {
-    // AI说完了，检查是否还有音频在播放
-    if (!isPlayingAudio) {
-      interviewStatus.value = 'listening'
-      // 启动录音计时器
-      startRecordingTimer()
-      // 完成AI响应消息
-      if (currentResponse.value) {
-        messages.value.push({
-          id: Date.now().toString(),
-          role: 'assistant',
-          content: currentResponse.value,
-          timestamp: new Date().toISOString()
-        })
-        currentResponse.value = ''
-        scrollToBottom()
-      }
-    }
+  if (status === 'analyzing') {
+    interviewStatus.value = 'analyzing'
+    pendingListeningStatus = false
+    analysisProgress.value = ''  // 清空之前的分析进度
   } else if (status === 'processing') {
     interviewStatus.value = 'processing'
+    pendingListeningStatus = false
     stopRecordingTimer()
   } else if (status === 'speaking') {
     interviewStatus.value = 'speaking'
+    pendingListeningStatus = false
     stopRecordingTimer()
   } else if (status === 'stopped') {
     interviewStatus.value = 'stopped'
+    pendingListeningStatus = false
     stopRecordingTimer()
+  }
+  // Note: 'listening' status is now handled by audio_complete message
+}
+
+// 切换到 listening 状态
+const switchToListening = () => {
+  console.log('[Status] Switching to listening')
+  interviewStatus.value = 'listening'
+  pendingListeningStatus = false
+  // 启动录音计时器
+  startRecordingTimer()
+  // 完成AI响应消息
+  if (currentResponse.value) {
+    messages.value.push({
+      id: Date.now().toString(),
+      role: 'assistant',
+      content: currentResponse.value,
+      timestamp: new Date().toISOString()
+    })
+    currentResponse.value = ''
+    scrollToBottom()
+  }
+}
+
+// 标记音频流是否已完成传输
+let audioStreamComplete = false
+
+// 处理音频流传输完成
+const handleAudioComplete = () => {
+  console.log('[Audio] Backend audio stream complete, queue:', audioQueue.length, 'streaming:', isStreamingPlayback)
+
+  // 标记流传输完成
+  audioStreamComplete = true
+  pendingListeningStatus = true
+
+  // 处理任何剩余的音频
+  if (audioQueue.length > 0 || isStreamingPlayback) {
+    if (!isStreamingPlayback) {
+      // 还没开始播放，现在开始
+      startStreamingPlayback()
+    } else {
+      // 已经在播放，处理剩余队列并等待完成
+      processAudioQueue()
+    }
+  } else {
+    // 没有音频，直接切换
+    switchToListening()
+  }
+}
+
+// 结束流式播放
+const finishStreamingPlayback = async () => {
+  // 确保队列为空
+  if (audioQueue.length > 0) {
+    console.log(`[Audio] Cannot finish yet, still have ${audioQueue.length} chunks`)
+    return
+  }
+
+  console.log('[Audio] Finishing streaming playback')
+
+  // 等待最后一个音频播放完成
+  if (playbackContext && playbackContext.state !== 'closed') {
+    const remainingTime = Math.max(0, nextPlayTime - playbackContext.currentTime)
+    if (remainingTime > 0) {
+      console.log(`[Audio] Waiting final ${remainingTime.toFixed(2)}s`)
+      await new Promise(resolve => setTimeout(resolve, remainingTime * 1000 + 200))
+    }
+
+    try {
+      await playbackContext.close()
+    } catch (e) {
+      console.error('Close playback context error:', e)
+    }
+  }
+  playbackContext = null
+  isStreamingPlayback = false
+  audioStreamComplete = false
+  nextPlayTime = 0
+
+  // 切换到 listening 状态
+  if (pendingListeningStatus) {
+    switchToListening()
   }
 }
 
@@ -617,6 +830,8 @@ const handleTranscript = (text: string, isFinal: boolean) => {
     scrollToBottom()
   } else {
     currentTranscript.value = text
+    // 流式转录时也滚动到底部
+    scrollToBottom()
   }
 }
 
@@ -638,13 +853,10 @@ const handleResponseText = (text: string) => {
   scrollToBottom()
 }
 
-// 处理音频（延迟播放，累积更多数据）
-let audioPlaybackTimer: number | null = null
-const AUDIO_BUFFER_DELAY = 200 // 等待200ms累积音频
-
+// 处理音频（流式播放 - 边收边播）
 const handleAudio = (audioBase64: string) => {
   try {
-    // 收到面试官音频时，立即切换到 speaking 状态（防止延迟导致继续采集）
+    // 收到面试官音频时，立即切换到 speaking 状态
     if (interviewStatus.value === 'listening') {
       interviewStatus.value = 'speaking'
       stopRecordingTimer()
@@ -657,69 +869,150 @@ const handleAudio = (audioBase64: string) => {
     }
     audioQueue.push(bytes.buffer)
 
-    // 延迟播放，等待累积更多音频数据
-    if (audioPlaybackTimer) {
-      clearTimeout(audioPlaybackTimer)
+    // 【流式播放】收到数据后立即处理
+    if (!isStreamingPlayback) {
+      // 计算队列中总字节数
+      const totalBytes = audioQueue.reduce((sum, buf) => sum + buf.byteLength, 0)
+      // 有足够数据（约0.2秒）就开始播放
+      if (totalBytes >= MIN_BUFFER_SIZE) {
+        startStreamingPlayback()
+      }
+    } else {
+      // 已经在播放中，处理新到的数据
+      processAudioQueue()
     }
-    audioPlaybackTimer = window.setTimeout(() => {
-      audioPlaybackTimer = null
-      playNextAudio()
-    }, AUDIO_BUFFER_DELAY)
   } catch (e) {
     console.error('Audio decode error:', e)
   }
 }
 
-// 播放音频队列（累积后播放，减少断续）
+// 开始流式音频播放
+const startStreamingPlayback = () => {
+  if (isStreamingPlayback) return
+  isStreamingPlayback = true
+  console.log('[Audio] Starting streaming playback')
+
+  // 创建播放用的 AudioContext
+  if (!playbackContext || playbackContext.state === 'closed') {
+    playbackContext = new AudioContext({ sampleRate: 24000 })
+  }
+
+  // 初始化播放时间
+  nextPlayTime = playbackContext.currentTime + 0.1  // 100ms 延迟启动
+
+  // 开始处理队列
+  processAudioQueue()
+}
+
+// 处理音频队列 - 批量调度所有待播放的音频
+const processAudioQueue = () => {
+  if (!playbackContext || playbackContext.state === 'closed') {
+    console.log('[Audio] No playback context, stopping')
+    return
+  }
+
+  let scheduledCount = 0
+
+  // 处理队列中所有可用的 chunk
+  while (audioQueue.length > 0) {
+    const buffer = audioQueue.shift()!
+
+    try {
+      // PCM 16-bit -> Float32
+      const int16Array = new Int16Array(buffer)
+      const float32Array = new Float32Array(int16Array.length)
+      for (let i = 0; i < int16Array.length; i++) {
+        float32Array[i] = int16Array[i]! / 32768.0
+      }
+
+      // 创建音频缓冲区
+      const audioBuffer = playbackContext.createBuffer(1, float32Array.length, 24000)
+      audioBuffer.getChannelData(0).set(float32Array)
+
+      // 调度播放
+      const source = playbackContext.createBufferSource()
+      source.buffer = audioBuffer
+      source.connect(playbackContext.destination)
+
+      // 确保播放时间不会落后于当前时间
+      const now = playbackContext.currentTime
+      if (nextPlayTime < now) {
+        nextPlayTime = now + 0.01
+      }
+
+      source.start(nextPlayTime)
+
+      // 更新下一个播放时间
+      const duration = float32Array.length / 24000
+      nextPlayTime += duration
+      scheduledCount++
+
+    } catch (e) {
+      console.error('Schedule audio error:', e)
+    }
+  }
+
+  if (scheduledCount > 0) {
+    const totalDuration = nextPlayTime - playbackContext.currentTime
+    console.log(`[Audio] Scheduled ${scheduledCount} chunks, total duration: ${totalDuration.toFixed(2)}s`)
+  }
+
+  // 如果流已完成且队列为空，准备结束
+  if (audioStreamComplete && audioQueue.length === 0) {
+    const remainingTime = Math.max(0, nextPlayTime - playbackContext.currentTime)
+    console.log(`[Audio] Stream complete, waiting ${remainingTime.toFixed(2)}s to finish`)
+    setTimeout(() => {
+      finishStreamingPlayback()
+    }, remainingTime * 1000 + 300)
+  }
+}
+
+// 播放音频队列（PCM 16-bit 24kHz 格式）
 const playNextAudio = async () => {
-  if (isPlayingAudio || audioQueue.length === 0 || !audioContext) return
+  if (isPlayingAudio || audioQueue.length === 0) return
 
   isPlayingAudio = true
 
   // 合并所有待播放的音频块
-  const allBuffers: Int16Array[] = []
+  const allBuffers: ArrayBuffer[] = []
+  let totalLength = 0
   while (audioQueue.length > 0) {
     const buffer = audioQueue.shift()!
-    allBuffers.push(new Int16Array(buffer))
+    allBuffers.push(buffer)
+    totalLength += buffer.byteLength
   }
 
-  if (allBuffers.length === 0) {
+  if (allBuffers.length === 0 || totalLength === 0) {
     isPlayingAudio = false
     return
   }
 
+  console.log(`[Audio] Playing ${allBuffers.length} chunks, total ${totalLength} bytes`)
+
   try {
-    // 计算总长度
-    const totalLength = allBuffers.reduce((sum, arr) => sum + arr.length, 0)
-    const mergedInt16 = new Int16Array(totalLength)
-
-    // 合并
+    // 合并所有音频块
+    const mergedBuffer = new Uint8Array(totalLength)
     let offset = 0
-    for (const arr of allBuffers) {
-      mergedInt16.set(arr, offset)
-      offset += arr.length
+    for (const buffer of allBuffers) {
+      mergedBuffer.set(new Uint8Array(buffer), offset)
+      offset += buffer.byteLength
     }
 
-    // PCM 16-bit -> Float32
-    const float32 = new Float32Array(mergedInt16.length)
-    for (let i = 0; i < mergedInt16.length; i++) {
-      float32[i] = (mergedInt16[i] ?? 0) / 32768
+    // Qwen-Omni 返回 PCM 16-bit 有符号整数，24kHz
+    const int16Array = new Int16Array(mergedBuffer.buffer)
+    const float32Array = new Float32Array(int16Array.length)
+
+    // PCM 16-bit -> Float32 (-1.0 to 1.0)
+    for (let i = 0; i < int16Array.length; i++) {
+      float32Array[i] = int16Array[i]! / 32768.0
     }
 
-    // 添加淡入淡出以减少爆音 (fade 50 samples ≈ 2ms @ 24kHz)
-    const fadeLength = Math.min(50, Math.floor(float32.length / 4))
-    for (let i = 0; i < fadeLength; i++) {
-      const factor = i / fadeLength
-      const startVal = float32[i]
-      const endVal = float32[float32.length - 1 - i]
-      if (startVal !== undefined) float32[i] = startVal * factor
-      if (endVal !== undefined) float32[float32.length - 1 - i] = endVal * factor
-    }
-
-    // 创建专用的播放 AudioContext（确保采样率正确）
+    // 创建 AudioContext (24kHz 采样率)
     const playbackContext = new AudioContext({ sampleRate: 24000 })
-    const audioBuffer = playbackContext.createBuffer(1, float32.length, 24000)
-    audioBuffer.getChannelData(0).set(float32)
+    const audioBuffer = playbackContext.createBuffer(1, float32Array.length, 24000)
+    audioBuffer.getChannelData(0).set(float32Array)
+
+    console.log(`[Audio] PCM: samples=${float32Array.length}, duration=${(float32Array.length / 24000).toFixed(2)}s`)
 
     // 播放
     const source = playbackContext.createBufferSource()
@@ -745,22 +1038,9 @@ const playNextAudio = async () => {
     return
   }
 
-  // 播放完成后，如果状态应该是listening，更新状态
-  if (interviewStatus.value === 'speaking') {
-    interviewStatus.value = 'listening'
-    // 启动录音计时器
-    startRecordingTimer()
-    // 完成AI响应消息
-    if (currentResponse.value) {
-      messages.value.push({
-        id: Date.now().toString(),
-        role: 'assistant',
-        content: currentResponse.value,
-        timestamp: new Date().toISOString()
-      })
-      currentResponse.value = ''
-      scrollToBottom()
-    }
+  // 音频全部播放完成，检查是否需要切换到 listening
+  if (pendingListeningStatus) {
+    switchToListening()
   }
 }
 
@@ -794,6 +1074,13 @@ const handlePhaseChange = (message: any) => {
   scrollToBottom()
 }
 
+// 处理轮次更新（阶段内）
+const handleRoundUpdate = (message: any) => {
+  currentRound.value = message.round || 0
+  maxRounds.value = message.max_rounds || 1
+  console.log(`[Round] Updated: ${currentRound.value + 1}/${maxRounds.value} in ${message.phase}`)
+}
+
 // 处理面试结束
 const handleInterviewEnd = (message: any) => {
   interviewStatus.value = 'stopped'
@@ -806,6 +1093,19 @@ const handleInterviewEnd = (message: any) => {
       content: `面试结束！评分: ${score}/100, 推荐等级: ${recommendation}`,
       timestamp: new Date().toISOString()
     })
+
+    // 3秒后跳转到完成页面
+    setTimeout(() => {
+      const token = route.params.token as string
+      router.push({
+        name: 'InterviewComplete',
+        params: { token },
+        query: {
+          score: score.toString(),
+          recommendation: recommendation
+        }
+      })
+    }, 3000)
   }
   scrollToBottom()
 }
@@ -845,7 +1145,7 @@ const startAudioCaptureWithScriptProcessor = () => {
     console.log(`Audio capture: inputRate=${inputRate}, outputRate=${outputRate}, ratio=${ratio}`)
 
     scriptProcessor.onaudioprocess = (e) => {
-      // 只在 listening 状态才处理音频（面试官说话时不采集）
+      // 只在 listening 状态才处理音频（分析中、面试官说话时都不采集）
       if (interviewStatus.value !== 'listening') {
         // 清空缓冲区，避免积累
         resampleBuffer = []
@@ -945,11 +1245,48 @@ const commitAudio = () => {
   if (ws?.readyState === WebSocket.OPEN && interviewStatus.value === 'listening') {
     console.log('Committing audio...')
     ws.send(JSON.stringify({
-      type: 'control',
-      action: 'commit'
+      type: 'commit'
     }))
     interviewStatus.value = 'processing'
   }
+}
+
+// 跳过当前面试官音频
+const skipAudio = async () => {
+  console.log('[Audio] Skipping audio playback')
+
+  // 清空音频队列
+  audioQueue.length = 0
+
+  // 停止播放
+  if (playbackContext && playbackContext.state !== 'closed') {
+    try {
+      await playbackContext.close()
+    } catch (e) {
+      console.error('Close playback context error:', e)
+    }
+  }
+  playbackContext = null
+  isStreamingPlayback = false
+  audioStreamComplete = false
+  nextPlayTime = 0
+
+  // 完成当前响应文本消息
+  if (currentResponse.value) {
+    messages.value.push({
+      id: Date.now().toString(),
+      role: 'assistant',
+      content: currentResponse.value,
+      timestamp: new Date().toISOString()
+    })
+    currentResponse.value = ''
+    scrollToBottom()
+  }
+
+  // 切换到 listening 状态
+  interviewStatus.value = 'listening'
+  pendingListeningStatus = false
+  startRecordingTimer()
 }
 
 // 结束面试
@@ -958,8 +1295,7 @@ const endInterview = () => {
 
   if (ws?.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({
-      type: 'control',
-      action: 'stop'
+      type: 'stop'
     }))
   }
 
@@ -999,6 +1335,12 @@ onUnmounted(() => {
     audioContext.close()
     audioContext = null
   }
+  // 清理播放 context
+  if (playbackContext) {
+    playbackContext.close()
+    playbackContext = null
+  }
+  isStreamingPlayback = false
 })
 </script>
 

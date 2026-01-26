@@ -23,6 +23,6 @@ export default defineConfig({
   preview: {
     port: 4173,
     host: '0.0.0.0',
-    allowedHosts: ['resume.luzhipeng.com', 'localhost', '154.222.16.164'],
+    allowedHosts: ['resume.luzhipeng.com', 'resume-agent.finmall.com', 'localhost', '154.222.16.164'],
   },
 })

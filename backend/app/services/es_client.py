@@ -30,5 +30,9 @@ class ESClient:
     def search(self, index_name: str, query: dict):
         return self.client.search(index=index_name, body=query)
 
-    def delete_document(self, index_name: str, doc_id: str):
-        return self.client.delete(index=index_name, id=doc_id)
+    def delete_document(self, index_name: str, doc_id: str, refresh: bool = False):
+        return self.client.delete(index=index_name, id=doc_id, refresh=refresh)
+
+    def refresh_index(self, index_name: str):
+        """强制刷新索引，使所有更改立即可见"""
+        return self.client.indices.refresh(index=index_name)

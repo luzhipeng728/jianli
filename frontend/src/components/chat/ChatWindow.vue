@@ -1,7 +1,7 @@
 <template>
-  <div class="flex flex-col h-full">
+  <div class="flex flex-col h-full min-h-0">
     <!-- Messages Area -->
-    <div ref="messagesRef" class="flex-1 overflow-y-auto p-6 bg-secondary-50/50">
+    <div ref="messagesRef" class="flex-1 overflow-y-auto p-6 bg-secondary-50/50 min-h-0">
       <!-- Welcome Message -->
       <div v-if="messages.length === 0" class="flex flex-col items-center justify-center h-full text-center">
         <div class="w-20 h-20 rounded-2xl bg-primary-50 flex items-center justify-center mb-4">
@@ -34,6 +34,7 @@
           :key="idx"
           :message="msg"
           :metrics="idx === messages.length - 1 ? lastMetrics : undefined"
+          @candidate-click="handleCandidateClick"
         />
 
         <!-- Loading State -->
@@ -58,7 +59,7 @@
     </div>
 
     <!-- Input Area -->
-    <div class="p-4 bg-white border-t border-secondary-100">
+    <div class="p-4 bg-white border-t border-secondary-100 flex-shrink-0">
       <div class="flex gap-3 items-end">
         <div class="flex-1 relative">
           <textarea
@@ -94,9 +95,17 @@
 </template>
 
 <script setup lang="ts">
-import { ref, nextTick } from 'vue'
+import { ref, nextTick, watch } from 'vue'
 import MessageBubble from './MessageBubble.vue'
-import { chatStream, type ChatMessage, type StreamChunk } from '@/api/chat'
+import { chatStream, type ChatMessage, type StreamChunk, type CardData } from '@/api/chat'
+
+const props = defineProps<{
+  jdId?: string
+}>()
+
+const emit = defineEmits<{
+  candidateClick: [candidate: any]
+}>()
 
 const messages = ref<ChatMessage[]>([])
 const inputText = ref('')
@@ -132,6 +141,10 @@ const handleSuggestion = (text: string) => {
   handleSend()
 }
 
+const handleCandidateClick = (candidate: any) => {
+  emit('candidateClick', candidate)
+}
+
 const handleSend = async () => {
   const text = inputText.value.trim()
   if (!text || loading.value) return
@@ -148,12 +161,20 @@ const handleSend = async () => {
   messages.value.push({ role: 'assistant', content: '' })
 
   try {
-    for await (const chunk of chatStream(text, sessionId.value)) {
+    for await (const chunk of chatStream(text, sessionId.value, false, props.jdId)) {
+      const msg = messages.value[assistantIdx]
+      if (!msg) continue
+
       if (chunk.type === 'text') {
-        const msg = messages.value[assistantIdx]
-        if (msg) {
-          msg.content += chunk.content || ''
-        }
+        msg.content += chunk.content || ''
+        scrollToBottom()
+      } else if (chunk.type === 'card') {
+        // 添加卡片数据
+        if (!msg.cards) msg.cards = []
+        msg.cards.push({
+          type: chunk.card_type as CardData['type'],
+          data: chunk.data
+        })
         scrollToBottom()
       } else if (chunk.type === 'done') {
         lastMetrics.value = chunk.metrics

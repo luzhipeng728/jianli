@@ -26,8 +26,8 @@ PHASE_CONFIGS: Dict[InterviewPhase, PhaseConfig] = {
         order=1,
         min_rounds=1,
         max_rounds=1,
-        description="开场寒暄",
-        prompt_hint="友好问候，让候选人放松"
+        description="开场",
+        prompt_hint="友好问候，说明流程，询问是否准备好"
     ),
     InterviewPhase.SELF_INTRO: PhaseConfig(
         phase=InterviewPhase.SELF_INTRO,

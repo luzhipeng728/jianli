@@ -47,20 +47,34 @@ class InterviewStorage:
         round_number: int,
         role: str,
         audio_data: bytes,
-        format: str = "wav"
+        format: str = "wav",
+        phase: str = None
     ) -> str:
-        """Save audio file"""
+        """Save audio file
+
+        Args:
+            session_id: Interview session ID
+            round_number: Round number within the phase
+            role: 'candidate' or 'interviewer'
+            audio_data: Audio bytes
+            format: Audio format (wav, mp3, etc.)
+            phase: Interview phase (opening, self_intro, etc.) - used to avoid filename collisions
+        """
         session_dir = self._get_session_dir(session_id)
         audio_dir = session_dir / "audio"
         audio_dir.mkdir(exist_ok=True)
 
-        filename = f"round_{round_number}_{role}.{format}"
+        # Include phase in filename to avoid overwriting
+        if phase:
+            filename = f"{phase}_round_{round_number}_{role}.{format}"
+        else:
+            filename = f"round_{round_number}_{role}.{format}"
         path = audio_dir / filename
 
         with open(path, "wb") as f:
             f.write(audio_data)
 
-        return str(path)
+        return f"audio/{filename}"  # Return relative path
 
     def load_audio(self, audio_path: str) -> Optional[bytes]:
         """Load audio file"""
@@ -112,12 +126,23 @@ class InterviewStorage:
             return True
         return False
 
-    def get_audio_url(self, audio_path: str) -> str:
-        """Convert local path to API URL for frontend"""
+    def get_audio_url(self, audio_path: str, session_id: str = None) -> str:
+        """Convert local path to API URL for frontend
+
+        Args:
+            audio_path: Can be relative (audio/filename.wav) or absolute path
+            session_id: Required for relative paths
+        """
         path = Path(audio_path)
-        session_id = path.parent.parent.name
         filename = path.name
-        return f"/api/interviews/{session_id}/audio/{filename}"
+
+        # For relative paths like "audio/filename.wav", use provided session_id
+        if session_id and not audio_path.startswith("/"):
+            return f"/api/interviews/{session_id}/audio/{filename}"
+
+        # For absolute paths, extract session_id from path
+        extracted_session_id = path.parent.parent.name
+        return f"/api/interviews/{extracted_session_id}/audio/{filename}"
 
 
 # Global instance

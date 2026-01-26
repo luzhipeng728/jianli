@@ -1,6 +1,12 @@
+export interface CardData {
+  type: 'candidates' | 'comparison' | 'stats'
+  data: any
+}
+
 export interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
+  cards?: CardData[]
 }
 
 export interface StreamChunk {
@@ -20,7 +26,8 @@ const API_BASE = import.meta.env.VITE_API_BASE_URL || ''
 export async function* chatStream(
   message: string,
   sessionId?: string,
-  showThinking = false
+  showThinking = false,
+  jdId?: string
 ): AsyncGenerator<StreamChunk> {
   const response = await fetch(`${API_BASE}/api/chat/message`, {
     method: 'POST',
@@ -33,6 +40,7 @@ export async function* chatStream(
       message,
       session_id: sessionId,
       show_thinking: showThinking,
+      jd_id: jdId || undefined,
     }),
   })
 

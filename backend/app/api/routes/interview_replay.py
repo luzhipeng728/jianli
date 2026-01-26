@@ -30,12 +30,12 @@ router = APIRouter(
 storage = get_interview_storage()
 
 
-@router.get("", response_model=List[dict])
+@router.get("")
 async def list_interviews(
     status: Optional[str] = Query(None, description="Filter by status: not_started, in_progress, completed, etc."),
     limit: int = Query(100, ge=1, le=1000, description="Maximum number of records to return"),
     offset: int = Query(0, ge=0, description="Number of records to skip")
-) -> List[dict]:
+) -> dict:
     """
     List all interview records with pagination and optional status filtering.
 
@@ -47,8 +47,8 @@ async def list_interviews(
     """
     records = storage.list_records(limit=limit, offset=offset, status=status)
 
-    # Return summary data
-    return [
+    # Return summary data wrapped in standard response format
+    data = [
         {
             "session_id": record.session_id,
             "resume_id": record.resume_id,
@@ -65,9 +65,10 @@ async def list_interviews(
         }
         for record in records
     ]
+    return {"status": "success", "data": data}
 
 
-@router.get("/{session_id}", response_model=dict)
+@router.get("/{session_id}")
 async def get_interview(session_id: str) -> dict:
     """
     Get complete interview record for a specific session.
@@ -78,6 +79,7 @@ async def get_interview(session_id: str) -> dict:
     - Phase transitions
     - Evaluation report
     - Audio URLs for playback
+    - Written test results (if available)
     """
     record = storage.load_record(session_id)
     if not record:
@@ -92,9 +94,47 @@ async def get_interview(session_id: str) -> dict:
     # Replace audio paths with URLs for frontend
     for dialogue in data["dialogues"]:
         if dialogue.get("audio_path"):
-            dialogue["audio_url"] = storage.get_audio_url(dialogue["audio_path"])
+            dialogue["audio_url"] = storage.get_audio_url(dialogue["audio_path"], session_id)
 
-    return data
+    # 获取笔试结果（从主面试服务）
+    try:
+        from app.services.interview_service import InterviewService
+        interview_service = InterviewService()
+        session = interview_service.get_session(session_id)
+        if session and session.written_test:
+            wt = session.written_test
+            data["written_test"] = {
+                "score": wt.score,
+                "total_questions": len(wt.questions),
+                "correct_count": sum(1 for a in wt.answers if a.is_correct),
+                "questions": [
+                    {
+                        "id": q.id,
+                        "type": q.type.value if hasattr(q.type, 'value') else q.type,
+                        "content": q.content,
+                        "options": q.options,
+                        "correct_answer": q.correct_answer,
+                        "points": q.points
+                    }
+                    for q in wt.questions
+                ],
+                "answers": [
+                    {
+                        "question_id": a.question_id,
+                        "answer": a.answer,
+                        "is_correct": a.is_correct,
+                        "ai_evaluation": getattr(a, 'ai_evaluation', '')
+                    }
+                    for a in wt.answers
+                ],
+                "started_at": wt.started_at.isoformat() if wt.started_at else None,
+                "completed_at": wt.completed_at.isoformat() if wt.completed_at else None
+            }
+    except Exception as e:
+        print(f"[InterviewReplay] Failed to load written test: {e}")
+        # Written test not available, continue without it
+
+    return {"status": "success", "data": data}
 
 
 @router.get("/{session_id}/dialogues", response_model=List[dict])
@@ -135,7 +175,7 @@ async def get_dialogues(
     for dialogue in dialogues:
         dialogue_dict = dialogue.model_dump(mode="json")
         if dialogue.audio_path:
-            dialogue_dict["audio_url"] = storage.get_audio_url(dialogue.audio_path)
+            dialogue_dict["audio_url"] = storage.get_audio_url(dialogue.audio_path, session_id)
         result.append(dialogue_dict)
 
     return result

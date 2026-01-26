@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     # Redis
     redis_host: str = "localhost"
     redis_port: int = 6379
+    redis_url: str = "redis://localhost:6379/0"
 
     # 阿里百炼
     dashscope_api_key: str = ""

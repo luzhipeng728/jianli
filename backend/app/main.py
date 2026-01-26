@@ -2,10 +2,11 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api.routes import knowledge, chat, resume, batch, auth, jd, interview, ws_interview, ws_omni_interview, voice_interview, ws_voice_interview, ws_structured_interview, interview_replay
+from app.api.routes import knowledge, chat, resume, batch, auth, jd, interview, ws_interview, ws_omni_interview, voice_interview, ws_voice_interview, ws_structured_interview, interview_replay, dimension
 from app.api.middleware.rate_limit import RateLimitMiddleware
 from app.config import get_settings
 from app.services.background_worker import background_worker
+from app.services.screening_worker import screening_worker
 from app.services.redis_client import get_redis_client
 
 settings = get_settings()
@@ -18,6 +19,9 @@ async def lifespan(app: FastAPI):
     print("[App] 正在启动后台任务处理器...")
     await background_worker.start()
 
+    print("[App] 正在启动AI筛选处理器...")
+    await screening_worker.start()
+
     print("[App] 正在初始化 Redis 连接...")
     redis = await get_redis_client()
     print("[App] Redis 连接初始化完成")
@@ -27,6 +31,9 @@ async def lifespan(app: FastAPI):
     # 关闭时
     print("[App] 正在停止后台任务处理器...")
     await background_worker.stop()
+
+    print("[App] 正在停止AI筛选处理器...")
+    await screening_worker.stop()
 
     print("[App] 正在关闭 Redis 连接...")
     await redis.close()
@@ -65,6 +72,7 @@ app.include_router(voice_interview.router, prefix="/api/voice-interview", tags=[
 app.include_router(ws_voice_interview.router)  # ASR+LLM+TTS 分离架构语音面试 (推荐，无60秒限制)
 app.include_router(ws_structured_interview.router, tags=["structured-interview"])  # 7-Phase Structured Interview with State Machine
 app.include_router(interview_replay.router)  # HR Interview Replay REST API
+app.include_router(dimension.router)  # 分析维度管理
 
 
 @app.get("/health")
