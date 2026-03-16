@@ -235,10 +235,27 @@
                   <path d="M12 14l9-5-9-5-9 5 9 5z" /><path d="M12 14l6.16-3.422a12.083 12.083 0 01.665 6.479A11.952 11.952 0 0012 20.055a11.952 11.952 0 00-6.824-2.998 12.078 12.078 0 01.665-6.479L12 14z" />
                 </svg>
               </div>
-              <div>
-                <p class="font-medium text-secondary-800">{{ edu.school }}</p>
+              <div class="flex-1">
+                <div class="flex items-center gap-2">
+                  <p class="font-medium text-secondary-800">{{ edu.school }}</p>
+                  <!-- 学校验证状态标签 -->
+                  <span v-if="edu.school_verified !== undefined" :class="[
+                    'px-2 py-0.5 text-xs rounded-full',
+                    edu.school_verified ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'
+                  ]">
+                    {{ edu.school_verified ? '✓ 已验证' : '⚠ 未验证' }}
+                  </span>
+                </div>
                 <p class="text-sm text-secondary-500">{{ edu.degree }} · {{ edu.major }}</p>
                 <p class="text-xs text-secondary-400" v-if="edu.start_date || edu.end_date">{{ edu.start_date }} - {{ edu.end_date }}</p>
+                <!-- 数据来源佐证 -->
+                <p v-if="edu.school_verification_source" class="text-xs text-secondary-400 mt-1">
+                  <span class="text-primary-500">数据来源: {{ edu.school_verification_source }}</span>
+                  <span v-if="edu.school_level" class="ml-2">{{ edu.school_level }}</span>
+                </p>
+                <p v-if="edu.school_verification_message && !edu.school_verified" class="text-xs text-amber-600 mt-1">
+                  {{ edu.school_verification_message }}
+                </p>
               </div>
             </div>
           </div>
@@ -275,6 +292,69 @@
             >
               {{ skill }}
             </span>
+          </div>
+        </div>
+
+        <!-- Dimension Analysis - AI多维度分析 -->
+        <div class="card p-4 mb-4" v-if="currentResume.dimension_analysis && currentResume.dimension_analysis.dimensions?.length">
+          <div class="flex items-center justify-between mb-3">
+            <div class="flex items-center gap-2">
+              <svg class="w-5 h-5 text-primary-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+              </svg>
+              <h4 class="text-sm font-semibold text-secondary-500 uppercase tracking-wider">AI多维度分析</h4>
+            </div>
+            <div class="flex items-center gap-2">
+              <span class="text-2xl font-bold" :class="getScoreColorClass(currentResume.dimension_analysis.overall_score)">
+                {{ currentResume.dimension_analysis.overall_score }}
+              </span>
+              <span class="text-sm text-secondary-500">综合评分</span>
+            </div>
+          </div>
+
+          <!-- 综合评估 -->
+          <div v-if="currentResume.dimension_analysis.summary" class="mb-4 p-3 bg-primary-50 rounded-lg">
+            <p class="text-sm text-primary-900">{{ currentResume.dimension_analysis.summary }}</p>
+          </div>
+
+          <!-- 各维度评分 -->
+          <div class="space-y-3 mb-4">
+            <div v-for="dim in currentResume.dimension_analysis.dimensions" :key="dim.name" class="border-b border-secondary-100 pb-3 last:border-0">
+              <div class="flex items-center justify-between mb-1">
+                <span class="text-sm font-medium text-secondary-700">{{ dim.name }}</span>
+                <div class="flex items-center gap-2">
+                  <span class="text-sm font-bold" :class="getScoreColorClass(dim.score)">{{ dim.score }}</span>
+                  <span class="text-xs px-2 py-0.5 rounded" :class="getLevelClass(dim.level)">{{ dim.level }}</span>
+                </div>
+              </div>
+              <!-- 进度条 -->
+              <div class="w-full bg-secondary-200 rounded-full h-2 mb-2">
+                <div class="h-2 rounded-full" :class="getScoreBarClass(dim.score)" :style="{ width: dim.score + '%' }"></div>
+              </div>
+              <!-- 亮点 -->
+              <div v-if="dim.highlights?.length" class="flex flex-wrap gap-1">
+                <span v-for="h in dim.highlights" :key="h" class="text-xs px-2 py-0.5 bg-green-100 text-green-800 rounded">
+                  ✓ {{ h }}
+                </span>
+              </div>
+              <!-- 问题 -->
+              <div v-if="dim.concerns?.length" class="flex flex-wrap gap-1 mt-1">
+                <span v-for="c in dim.concerns" :key="c" class="text-xs px-2 py-0.5 bg-amber-100 text-amber-800 rounded">
+                  ⚠ {{ c }}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <!-- 建议 -->
+          <div v-if="currentResume.dimension_analysis.recommendations?.length" class="p-3 bg-blue-50 rounded-lg">
+            <p class="text-xs font-semibold text-blue-900 mb-1">改进建议：</p>
+            <ul class="text-xs text-blue-800 space-y-1">
+              <li v-for="rec in currentResume.dimension_analysis.recommendations" :key="rec" class="flex items-start gap-1">
+                <span>•</span>
+                <span>{{ rec }}</span>
+              </li>
+            </ul>
           </div>
         </div>
 
@@ -820,6 +900,31 @@ const getWarningTypeLabel = (type: string): string => {
     general: '风险提示'
   }
   return labels[type] || type
+}
+
+// 维度分析相关的辅助方法
+const getScoreColorClass = (score: number): string => {
+  if (score >= 90) return 'text-green-600'
+  if (score >= 75) return 'text-blue-600'
+  if (score >= 60) return 'text-yellow-600'
+  return 'text-red-600'
+}
+
+const getScoreBarClass = (score: number): string => {
+  if (score >= 90) return 'bg-green-500'
+  if (score >= 75) return 'bg-blue-500'
+  if (score >= 60) return 'bg-yellow-500'
+  return 'bg-red-500'
+}
+
+const getLevelClass = (level: string): string => {
+  const classMap: Record<string, string> = {
+    '优秀': 'bg-green-100 text-green-800',
+    '良好': 'bg-blue-100 text-blue-800',
+    '一般': 'bg-yellow-100 text-yellow-800',
+    '不足': 'bg-red-100 text-red-800'
+  }
+  return classMap[level] || 'bg-gray-100 text-gray-800'
 }
 
 onMounted(() => {

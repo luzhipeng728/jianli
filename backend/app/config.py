@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     # JWT
     jwt_secret: str = "dev-secret-key"
     jwt_algorithm: str = "HS256"
-    jwt_expire_minutes: int = 60 * 24  # 24小时
+    jwt_expire_minutes: int = 60 * 24 * 30  # 30天（长期登录，用户不清除token则保持登录状态）
 
     class Config:
         env_file = ".env"

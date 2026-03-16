@@ -23,19 +23,37 @@ export interface StreamChunk {
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || ''
 
+// 从 localStorage 获取 token
+const getToken = (): string | null => {
+  return localStorage.getItem('access_token')
+}
+
+// 清除 token
+const removeToken = (): void => {
+  localStorage.removeItem('access_token')
+  localStorage.removeItem('user_info')
+}
+
 export async function* chatStream(
   message: string,
   sessionId?: string,
   showThinking = false,
   jdId?: string
 ): AsyncGenerator<StreamChunk> {
+  const headers: HeadersInit = {
+    'Content-Type': 'application/json',
+    'Accept': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+  }
+
+  const token = getToken()
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`
+  }
+
   const response = await fetch(`${API_BASE}/api/chat/message`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Accept': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-    },
+    headers,
     body: JSON.stringify({
       message,
       session_id: sessionId,
@@ -43,6 +61,13 @@ export async function* chatStream(
       jd_id: jdId || undefined,
     }),
   })
+
+  // 处理 401 未授权错误
+  if (response.status === 401) {
+    removeToken()
+    window.location.href = '/login'
+    throw new Error('登录已过期，请重新登录')
+  }
 
   if (!response.ok) {
     throw new Error(`HTTP error! status: ${response.status}`)

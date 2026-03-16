@@ -203,6 +203,12 @@ def init_elasticsearch():
                 },
                 "updated_at": {
                     "type": "date"
+                },
+                "embedding": {
+                    "type": "dense_vector",
+                    "dims": 1024,
+                    "index": True,
+                    "similarity": "cosine"
                 }
             }
         }

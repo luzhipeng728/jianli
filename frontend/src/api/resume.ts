@@ -1,9 +1,25 @@
-import request, { getToken } from './request'
+import request, { getToken, removeToken } from './request'
 
 export interface EducationWarning {
   risk_level: 'high' | 'medium' | 'low'
   type: string
   message: string
+}
+
+export interface DimensionScore {
+  name: string
+  score: number
+  level: string
+  highlights: string[]
+  concerns: string[]
+}
+
+export interface DimensionAnalysis {
+  dimensions: DimensionScore[]
+  overall_score: number
+  summary: string
+  recommendations: string[]
+  analysis_source?: string
 }
 
 export interface ResumeData {
@@ -23,6 +39,11 @@ export interface ResumeData {
     major: string
     start_date?: string
     end_date?: string
+    school_verified?: boolean
+    school_verification_source?: string
+    school_verification_message?: string
+    school_level?: string
+    school_department?: string
   }>
   experience: Array<{
     company: string
@@ -40,6 +61,7 @@ export interface ResumeData {
     type: string
     message: string
   }>
+  dimension_analysis?: DimensionAnalysis  // 多维度分析结果
   created_at: string
 }
 
@@ -89,6 +111,14 @@ export async function* uploadResumeStream(file: File): AsyncGenerator<UploadProg
     body: formData,
     headers,
   })
+
+  // 处理 401 未授权错误
+  if (response.status === 401) {
+    removeToken()
+    // 直接跳转到登录页
+    window.location.href = '/login'
+    throw new Error('登录已过期，请重新登录')
+  }
 
   if (!response.ok) {
     throw new Error(`HTTP error! status: ${response.status}`)

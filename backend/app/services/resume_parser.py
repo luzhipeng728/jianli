@@ -3,6 +3,8 @@ import json
 from app.services.file_processor import FileProcessor, FileType
 from app.services.llm_client import LLMClient
 from app.services.es_client import ESClient
+from app.services.university_service import university_service, UniversityVerification
+from app.services.enhanced_school_verifier import verify_school_with_context
 from app.models.resume import ResumeData, BasicInfo, Education, Experience, Skills, JobIntention, Warning, EducationWarning, RecommendedJD
 
 RESUME_INDEX = "resumes"
@@ -51,43 +53,37 @@ EXTRACT_PROMPT = """你是一个专业的简历解析和风险检测助手。请
    - salary_max: 最高期望薪资（数字，单位元）
    - location: 期望工作地点
 
-### 6. education_warnings（学历造假风险）数组 - **【最重要】必须严格检测！**
+### 6. education_warnings（学历造假风险）数组 - **请注意：学校真实验证将由系统自动完成**
 
-这是简历审核的重中之重！请务必仔细检查以下学历造假风险（每个问题包含 risk_level、type、message 字段）：
+系统会自动使用教育部官方数据验证学校是否正规，你只需检测以下逻辑问题：
 
 **risk_level 风险等级：**
 - high: 高风险（强烈建议核实）
 - medium: 中风险（建议核实）
 - low: 低风险（可关注）
 
-**必须检测的学历造假类型：**
+**需要检测的学历造假类型（不包含学校真伪，系统会自动验证）：**
 
-1. **fake_university** - 野鸡大学/虚假院校
-   - 检查是否为已知的野鸡大学（如：中国邮电大学、北京工商管理大学、上海经济贸易大学等虚假院校）
-   - 校名与知名大学高度相似但不同（如"清华大学"vs"清大大学"）
-   - 校名格式异常（如带有"进修"、"研修"、"函授"等非正规学历字样）
-
-2. **diploma_mill** - 文凭工厂/买卖学历
+1. **diploma_mill** - 文凭工厂/买卖学历
    - 学习时间异常短（如1年完成本科、6个月完成硕士）
    - 在职期间全日制读书（时间明显冲突）
    - 短时间内获得多个学位
 
-3. **degree_inflation** - 学历注水/夸大
+2. **degree_inflation** - 学历注水/夸大
    - 将培训证书描述为正规学历
    - 将结业证书说成毕业证书
    - 将专科说成本科
 
-4. **timeline_fraud** - 时间线造假
+3. **timeline_fraud** - 时间线造假
    - 学历时间与年龄不符（如18岁硕士毕业）
    - 教育时间段重叠
    - 毕业时间在入学时间之前
 
-5. **overseas_fake** - 海外学历造假
-   - 不知名的海外院校
+4. **overseas_fake** - 海外学历可疑
    - 学习时间过短（如3个月海外硕士）
-   - 无法验证的海外学校名称
+   - 学校名称表述模糊
 
-6. **info_missing** - 关键信息缺失
+5. **info_missing** - 关键信息缺失
    - 只写学校不写专业
    - 只写学历不写时间
    - 教育经历描述模糊
@@ -118,10 +114,10 @@ EXTRACT_PROMPT = """你是一个专业的简历解析和风险检测助手。请
 1. 请直接返回JSON格式，不要添加```json标记或任何解释文字
 2. **所有字段值必须是中文**（技能名称除外）
 3. 如果原文是英文，必须翻译成中文
-4. **education_warnings 是最重要的字段**，必须认真检测学历造假风险：
+4. **education_warnings 用于检测逻辑问题**（学校真伪由系统自动验证）：
    - risk_level: 风险等级（high/medium/low）
    - type: 问题类型（使用上述英文标识）
-   - message: 具体问题描述（中文，详细说明发现的可疑之处和建议核实的内容）
+   - message: 具体问题描述（中文，详细说明发现的可疑之处）
 5. 每个warning必须包含：
    - type: 问题类型（使用上述英文标识）
    - message: 具体问题描述（中文，详细说明发现的问题和可疑之处）
@@ -172,7 +168,7 @@ class ResumeParser:
         result = await self.llm_client.chat(prompt)
 
         # 3. 解析JSON结果
-        resume_data = self._parse_llm_result(result, filename, file_type.value, text)
+        resume_data = await self._parse_llm_result(result, filename, file_type.value, text)
 
         # 4. 创建向量嵌入
         embedding_text = self._create_embedding_text(resume_data)
@@ -224,8 +220,18 @@ class ResumeParser:
             full_result += chunk
             yield {"type": "chunk", "content": chunk}
 
-        # 3. 解析JSON结果
-        resume_data = self._parse_llm_result(full_result, filename, file_type.value, text)
+        # 3. 解析JSON结果（需要使用 await，但生成器中不能直接用，需要特殊处理）
+        # 先解析JSON
+        import json
+        result = full_result.strip()
+        if result.startswith("```"):
+            result = result.split("```")[1]
+            if result.startswith("json"):
+                result = result[4:]
+        data = json.loads(result)
+
+        # 创建 ResumeData 对象（不包含学校验证）
+        resume_data = self._parse_llm_result_basic(data, filename, file_type.value, text)
 
         # 4. 创建向量嵌入
         yield {"type": "status", "message": "正在创建语义向量..."}
@@ -234,6 +240,9 @@ class ResumeParser:
 
         # 5. 存储到ES（包含embedding和原始文件）
         self._save_to_es(resume_data, embedding, file_content)
+
+        # 6. 更新ES，添加学校验证结果
+        await self._update_school_verification(resume_data)
 
         yield {"type": "done", "data": resume_data}
 
@@ -259,7 +268,7 @@ class ResumeParser:
 
         return "\n".join(parts)
 
-    def _parse_llm_result(
+    async def _parse_llm_result(
         self, result: str, filename: str, file_type: str, raw_text: str
     ) -> ResumeData:
         try:
@@ -335,13 +344,70 @@ class ResumeParser:
                     exp[str_field] = ""
             experience_list.append(exp)
 
-        # 清理教育经历中的字段
+        # 清理教育经历中的字段 + 学校真实验证（使用增强服务）
         education_list = []
+        education_warnings_list = []  # 初始化警告列表（包含学校验证警告）
+
+        # 构建简历上下文用于学校验证
+        resume_context_for_verification = {"education": data.get("education", [])}
+
         for edu in data.get("education", []):
             # 确保字符串字段不是None
             for str_field in ["school", "degree", "major", "start_date", "end_date"]:
                 if str_field in edu and edu[str_field] is None:
                     edu[str_field] = ""
+
+            # 使用增强的学校验证服务（智能体 + ES上下文 + LLM分析）
+            school_name = edu.get("school", "").strip()
+            if school_name:
+                try:
+                    enhanced_result = await verify_school_with_context(
+                        school_name,
+                        resume_context_for_verification
+                    )
+
+                    # 添加验证结果到教育经历中
+                    edu["school_verified"] = enhanced_result.get("is_verified", False)
+                    edu["school_verification_source"] = enhanced_result.get("source", "未知")
+                    edu["school_verification_message"] = enhanced_result.get("analysis", "")
+
+                    # 从权威数据中提取详细信息
+                    authority_data = enhanced_result.get("authority_data", {})
+                    if authority_data.get("moe_data"):
+                        moe = authority_data["moe_data"]
+                        edu["school_level"] = moe.get("level", "")
+                        edu["school_department"] = moe.get("department", "")
+                    else:
+                        edu["school_level"] = ""
+                        edu["school_department"] = ""
+
+                    # 如果学校未验证，添加到 warnings
+                    if not enhanced_result.get("is_verified", False):
+                        suggestions = enhanced_result.get("suggestions", [])
+                        message = f"学校 '{school}' 验证失败：{enhanced_result.get('analysis', '')}"
+                        if suggestions:
+                            message += f" 建议：{'; '.join(suggestions[:2])}"
+
+                        education_warnings_list.append(EducationWarning(
+                            risk_level="high" if enhanced_result.get("confidence") == "high" else "medium",
+                            type="fake_university",
+                            message=message
+                        ))
+
+                except Exception as verify_error:
+                    print(f"[ResumeParser] 学校验证失败，使用基础验证: {verify_error}")
+                    # 回退到基础验证
+                    verification = university_service.verify(school_name)
+                    edu["school_verified"] = verification.is_verified
+                    edu["school_verification_source"] = verification.source
+                    edu["school_verification_message"] = "; ".join(verification.warnings) if verification.warnings else verification.source
+                    if verification.university:
+                        edu["school_level"] = verification.university.level
+                        edu["school_department"] = verification.university.department
+                    else:
+                        edu["school_level"] = ""
+                        edu["school_department"] = ""
+
             education_list.append(edu)
 
         # 清理求职意向中的字段
@@ -365,8 +431,7 @@ class ResumeParser:
                     digits = ''.join(filter(str.isdigit, val_str))
                     job_intention_data[field] = int(digits) if digits else None
 
-        # 处理 education_warnings - 学历造假风险（重点）
-        education_warnings_list = []
+        # 处理 LLM 返回的 education_warnings - 逻辑问题检测
         for w in data.get("education_warnings", []):
             if isinstance(w, str):
                 education_warnings_list.append(EducationWarning(risk_level="medium", type="general", message=w))
@@ -397,6 +462,210 @@ class ResumeParser:
             education_warnings=education_warnings_list,
             warnings=warnings_list,
         )
+
+    def _parse_llm_result_basic(
+        self, data: dict, filename: str, file_type: str, raw_text: str
+    ) -> ResumeData:
+        """
+        基础版本的LLM结果解析（同步，不包含学校验证）
+        用于parse_with_text_stream生成器中，先返回基本数据
+        """
+        import uuid
+        resume_id = str(uuid.uuid4())
+
+        # 清理基本信息中的字段
+        basic_info_data = data.get("basic_info", {}) or {}
+
+        # 确保字符串字段不是None
+        for str_field in ["name", "phone", "email", "gender"]:
+            if str_field in basic_info_data and basic_info_data[str_field] is None:
+                basic_info_data[str_field] = ""
+
+        # 处理age字段
+        if "age" in basic_info_data and not basic_info_data["age"]:
+            basic_info_data["age"] = None
+        elif "age" in basic_info_data and basic_info_data["age"]:
+            age_val = basic_info_data["age"]
+            if isinstance(age_val, int) and 16 <= age_val <= 100:
+                basic_info_data["age"] = age_val
+            else:
+                import re
+                age_str = str(age_val)
+                match = re.search(r'(\d{1,2})\s*岁', age_str)
+                if match:
+                    age = int(match.group(1))
+                    basic_info_data["age"] = age if 16 <= age <= 100 else None
+                elif re.search(r'(19|20)\d{2}', age_str):
+                    year_match = re.search(r'((?:19|20)\d{2})', age_str)
+                    if year_match:
+                        birth_year = int(year_match.group(1))
+                        from datetime import datetime
+                        basic_info_data["age"] = datetime.now().year - birth_year
+                    else:
+                        basic_info_data["age"] = None
+                else:
+                    digits = ''.join(filter(str.isdigit, age_str))
+                    if digits:
+                        age = int(digits)
+                        basic_info_data["age"] = age if 16 <= age <= 100 else None
+                    else:
+                        basic_info_data["age"] = None
+
+        # 清理工作经历
+        experience_list = []
+        for exp in data.get("experience", []):
+            if "duties" in exp and isinstance(exp["duties"], list):
+                exp["duties"] = "\n".join(exp["duties"])
+            for str_field in ["company", "title", "duties", "start_date", "end_date"]:
+                if str_field in exp and exp[str_field] is None:
+                    exp[str_field] = ""
+            experience_list.append(exp)
+
+        # 清理教育经历（不包含学校验证）
+        education_list = []
+        for edu in data.get("education", []):
+            for str_field in ["school", "degree", "major", "start_date", "end_date"]:
+                if str_field in edu and edu[str_field] is None:
+                    edu[str_field] = ""
+            # 初始化验证字段为空
+            edu["school_verified"] = False
+            edu["school_verification_source"] = ""
+            edu["school_verification_message"] = ""
+            edu["school_level"] = ""
+            edu["school_department"] = ""
+            education_list.append(edu)
+
+        # 清理求职意向
+        job_intention_data = data.get("job_intention", {}) or {}
+        for str_field in ["position", "location"]:
+            if str_field in job_intention_data and job_intention_data[str_field] is None:
+                job_intention_data[str_field] = ""
+
+        # 处理薪资
+        for field in ["salary_min", "salary_max"]:
+            if field in job_intention_data and job_intention_data[field]:
+                val_str = str(job_intention_data[field]).upper()
+                if "K" in val_str:
+                    val_str = val_str.replace("K", "")
+                    digits = ''.join(filter(str.isdigit, val_str))
+                    job_intention_data[field] = int(digits) * 1000 if digits else None
+                else:
+                    digits = ''.join(filter(str.isdigit, val_str))
+                    job_intention_data[field] = int(digits) if digits else None
+
+        # 处理warnings
+        education_warnings_list = []
+        for w in data.get("education_warnings", []):
+            if isinstance(w, str):
+                education_warnings_list.append(EducationWarning(risk_level="medium", type="general", message=w))
+            elif isinstance(w, dict):
+                w.setdefault("risk_level", "medium")
+                w.setdefault("type", "general")
+                education_warnings_list.append(EducationWarning(**w))
+
+        warnings_list = []
+        for w in data.get("warnings", []):
+            if isinstance(w, str):
+                warnings_list.append(Warning(type="general", message=w))
+            elif isinstance(w, dict):
+                warnings_list.append(Warning(**w))
+
+        return ResumeData(
+            id=resume_id,
+            file_name=filename,
+            file_type=file_type,
+            raw_text=raw_text,
+            basic_info=BasicInfo(**basic_info_data),
+            education=[Education(**e) for e in education_list],
+            experience=[Experience(**e) for e in experience_list],
+            skills=Skills(**data.get("skills", {})),
+            job_intention=JobIntention(**job_intention_data),
+            education_warnings=education_warnings_list,
+            warnings=warnings_list,
+        )
+
+    async def _update_school_verification(self, resume: ResumeData) -> None:
+        """
+        异步更新学校验证结果并保存到ES
+        在ES保存后调用，更新学校验证信息
+        """
+        from app.models.resume import Education
+        education_list = []
+        education_warnings_list = list(resume.education_warnings)  # 复制现有警告
+
+        # 构建简历上下文
+        resume_context = {
+            "education": [e.model_dump() for e in resume.education]
+        }
+
+        for edu in resume.education:
+            edu_dict = edu.model_dump()
+            school_name = edu.school.strip()
+
+            if school_name:
+                try:
+                    # 使用增强的学校验证服务
+                    enhanced_result = await verify_school_with_context(
+                        school_name,
+                        resume_context
+                    )
+
+                    edu_dict["school_verified"] = enhanced_result.get("is_verified", False)
+                    edu_dict["school_verification_source"] = enhanced_result.get("source", "未知")
+                    edu_dict["school_verification_message"] = enhanced_result.get("analysis", "")
+
+                    authority_data = enhanced_result.get("authority_data", {})
+                    if authority_data.get("moe_data"):
+                        moe = authority_data["moe_data"]
+                        edu_dict["school_level"] = moe.get("level", "")
+                        edu_dict["school_department"] = moe.get("department", "")
+                    else:
+                        edu_dict["school_level"] = ""
+                        edu_dict["school_department"] = ""
+
+                    # 未验证通过则添加警告
+                    if not enhanced_result.get("is_verified", False):
+                        suggestions = enhanced_result.get("suggestions", [])
+                        message = f"学校 '{school}' 验证失败：{enhanced_result.get('analysis', '')}"
+                        if suggestions:
+                            message += f" 建议：{'; '.join(suggestions[:2])}"
+                        education_warnings_list.append(EducationWarning(
+                            risk_level="high" if enhanced_result.get("confidence") == "high" else "medium",
+                            type="fake_university",
+                            message=message
+                        ))
+
+                except Exception as verify_error:
+                    print(f"[ResumeParser] 学校验证失败: {verify_error}")
+                    # 回退到基础验证
+                    verification = university_service.verify(school_name)
+                    edu_dict["school_verified"] = verification.is_verified
+                    edu_dict["school_verification_source"] = verification.source
+                    edu_dict["school_verification_message"] = "; ".join(verification.warnings) if verification.warnings else verification.source
+                    if verification.university:
+                        edu_dict["school_level"] = verification.university.level
+                        edu_dict["school_department"] = verification.university.department
+                    else:
+                        edu_dict["school_level"] = ""
+                        edu_dict["school_department"] = ""
+
+            education_list.append(Education(**edu_dict))
+
+        # 更新resume对象
+        resume.education = education_list
+        resume.education_warnings = education_warnings_list
+
+        # 更新ES文档
+        try:
+            doc = resume.model_dump(mode="json")
+            # 只更新验证相关字段，不影响其他数据
+            update_doc = {
+                "education": doc.get("education", []),
+                "education_warnings": doc.get("education_warnings", [])
+            }
+            self.es_client.update_document(RESUME_INDEX, resume.id, update_doc)
+        except Exception as e:
+            print(f"[ResumeParser] 更新ES学校验证失败: {e}")
 
     def _match_all_jds(self, resume: ResumeData) -> list[RecommendedJD]:
         """匹配所有JD，返回推荐列表（按匹配度排序）"""

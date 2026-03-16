@@ -128,6 +128,50 @@ class BatchProcessor:
                 if not resume:
                     raise Exception("解析失败：未能获取简历数据")
 
+                # 进行维度分析
+                yield {
+                    "type": "file_status",
+                    "file_id": file_task.file_id,
+                    "file_name": filename,
+                    "message": "正在进行AI多维度分析..."
+                }
+
+                try:
+                    from app.services.dimension_analyzer import analyze_resume_dimensions
+                    analysis_result = await analyze_resume_dimensions(
+                        resume.model_dump(mode="json"),
+                        analysis_type="screening"
+                    )
+
+                    # 将维度分析结果添加到简历数据
+                    from app.models.resume import DimensionAnalysis, DimensionScore
+                    resume.dimension_analysis = DimensionAnalysis(
+                        dimensions=[
+                            DimensionScore(
+                                name=d.name,
+                                score=d.score,
+                                level=d.level,
+                                highlights=d.highlights,
+                                concerns=d.concerns
+                            )
+                            for d in analysis_result.dimensions
+                        ],
+                        overall_score=analysis_result.overall_score,
+                        summary=analysis_result.summary,
+                        recommendations=analysis_result.recommendations,
+                        analysis_date=await self._get_current_time()
+                    )
+
+                    # 更新ES中的简历数据
+                    from app.services.es_client import ESClient
+                    es_client = ESClient()
+                    doc = resume.model_dump(mode="json")
+                    es_client.index_document("resumes", resume.id, doc)
+
+                except Exception as analysis_error:
+                    print(f"[BatchProcessor] 维度分析失败: {analysis_error}")
+                    # 维度分析失败不影响整体流程
+
                 # 构建详细结果
                 result_data = {
                     "resume_id": resume.id,
@@ -138,6 +182,17 @@ class BatchProcessor:
                     "warnings_count": len(resume.warnings),
                     "warnings": [{"type": w.type, "message": w.message} for w in resume.warnings[:5]]
                 }
+
+                # 添加维度分析结果到返回数据
+                if resume.dimension_analysis:
+                    result_data["dimension_analysis"] = {
+                        "overall_score": resume.dimension_analysis.overall_score,
+                        "summary": resume.dimension_analysis.summary,
+                        "dimensions": [
+                            {"name": d.name, "score": d.score, "level": d.level}
+                            for d in resume.dimension_analysis.dimensions
+                        ]
+                    }
 
                 # 更新为成功
                 await self.task_manager.update_file_status(
@@ -320,6 +375,11 @@ class BatchProcessor:
             }
         except Exception as e:
             return {"status": "failed", "error": str(e)}
+
+    async def _get_current_time(self) -> str:
+        """获取当前时间字符串"""
+        from datetime import datetime
+        return datetime.now().isoformat()
 
     async def _try_ocr_fallback(self, filename: str, content: bytes) -> str | None:
         """尝试使用OCR方式提取文本

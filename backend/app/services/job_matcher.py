@@ -320,43 +320,82 @@ class JobMatcher:
         resume: ResumeData,
         job_req: JobRequirement
     ) -> MatchResult:
-        """使用LLM进行智能匹配分析（中文返回）"""
+        """使用LLM进行智能匹配分析（使用维度配置）"""
+        # 获取维度配置
+        try:
+            dimension_service = get_dimension_service()
+            dimensions = dimension_service.get_screening_prompts()
+        except Exception:
+            # 如果获取失败，使用默认维度
+            dimensions = [
+                {"name": "技能匹配", "weight": 0.40, "description": "技术技能与岗位要求的匹配程度", "prompt_hint": "评估硬技能和软技能的匹配度"},
+                {"name": "工作经验", "weight": 0.30, "description": "工作年限和相关经验的匹配程度", "prompt_hint": "评估工作年限、行业经验、相关项目经验"},
+                {"name": "教育背景", "weight": 0.15, "description": "学历和专业背景的匹配程度", "prompt_hint": "评估学历层次、毕业院校、专业背景"},
+                {"name": "求职意向", "weight": 0.15, "description": "求职意向与岗位的匹配程度", "prompt_hint": "评估期望职位、期望薪资、工作地点匹配度"},
+            ]
+
+        # 构建维度描述
+        dimension_prompts = "\n".join([
+            f"  - **{d['name']}**（权重 {(d.get('weight', 0.25) * 100):.0f}%）：{d.get('prompt_hint', d.get('description', ''))}"
+            for d in dimensions
+        ])
+
         # 构建简洁的简历摘要
-        skills_text = ', '.join(resume.skills.hard_skills[:10]) if resume.skills.hard_skills else '未提供'
+        skills_text = ', '.join(resume.skills.hard_skills[:15]) if resume.skills.hard_skills else '未提供'
+        soft_skills_text = ', '.join(resume.skills.soft_skills[:10]) if resume.skills.soft_skills else '无'
         exp_text = '; '.join([f'{e.company}-{e.title}({e.start_date or ""}~{e.end_date or "至今"})' for e in resume.experience[:3]]) if resume.experience else '无'
-        edu_text = f"{resume.education[0].school} {resume.education[0].degree}" if resume.education else '未知'
+        edu_text = "; ".join([f"{e.school} {e.degree} {e.major}" for e in resume.education]) if resume.education else '未知'
+        intention_text = f"{resume.job_intention.position} | {resume.job_intention.location} | {resume.job_intention.salary_min or '?'}-{resume.job_intention.salary_max or '?'}" if resume.job_intention else '未提供'
 
         # 构建岗位要求摘要
-        jd_skills = ', '.join(job_req.required_skills[:8]) if job_req.required_skills else '未指定'
+        jd_skills = ', '.join(job_req.required_skills[:10]) if job_req.required_skills else '未指定'
         jd_preferred = ', '.join(job_req.preferred_skills[:5]) if job_req.preferred_skills else '无'
 
-        prompt = f"""你是一个专业的HR助手，请用中文分析候选人与岗位的匹配度。
+        # 计算权重总和（用于归一化）
+        total_weight = sum(d.get('weight', 0.25) for d in dimensions) or 1.0
+
+        prompt = f"""你是一个专业的HR分析师，请用中文对候选人与岗位进行智能匹配分析。
+
+## 分析维度
+请按照以下维度进行评分（0-100分）：
+{dimension_prompts}
 
 ## 岗位信息
 - 岗位: {job_req.title}
 - 必需技能: {jd_skills}
 - 加分技能: {jd_preferred}
-- 岗位描述: {job_req.description[:200] if job_req.description else '无'}
+- 最低经验: {job_req.min_experience_years}年
+- 学历要求: {job_req.education_level or '不限'}
+- 工作地点: {job_req.location or '不限'}
+- 岗位描述: {job_req.description[:300] if job_req.description else '无'}
 
 ## 候选人信息
 - 姓名: {resume.basic_info.name}
+- 年龄: {resume.basic_info.age or '未知'}
 - 技能: {skills_text}
+- 软技能: {soft_skills_text}
 - 工作经历: {exp_text}
 - 学历: {edu_text}
+- 求职意向: {intention_text}
 
-请快速评估并返回JSON（必须用中文）：
+## 输出要求
+请返回JSON格式（不要用```json包裹）：
 {{
-  "overall_score": 0-100的总体匹配分数,
-  "skill_score": 0-100的技能匹配分,
-  "experience_score": 0-100的经验匹配分,
-  "education_score": 0-100的学历匹配分,
+  "dimensions": [
+    {{"name": "技能匹配", "score": 0-100, "highlights": ["亮点"], "concerns": ["问题"]}},
+    {{"name": "工作经验", "score": 0-100, "highlights": ["亮点"], "concerns": ["问题"]}},
+    {{"name": "教育背景", "score": 0-100, "highlights": ["亮点"], "concerns": ["问题"]}},
+    {{"name": "求职意向", "score": 0-100, "highlights": ["亮点"], "concerns": ["问题"]}}
+  ],
+  "overall_score": 0-100的总体匹配分数（按权重加权计算）,
   "matched_skills": ["匹配的技能1", "技能2"],
   "missing_skills": ["缺失的关键技能"],
-  "highlights": ["亮点（一句话）"],
-  "concerns": ["顾虑（一句话）"],
+  "highlights": ["综合亮点1", "亮点2"],
+  "concerns": ["综合顾虑1", "顾虑2"],
   "reason": "一句话评估理由"
 }}
 
+注意：overall_score 应该按照各维度权重加权平均计算。
 只返回JSON，不要其他内容。"""
 
         try:
@@ -371,16 +410,43 @@ class JobMatcher:
             else:
                 data = json.loads(result.strip())
 
+            # 提取各维度分数
+            dimension_scores = {}
+            for dim_data in data.get("dimensions", []):
+                dimension_scores[dim_data["name"]] = dim_data.get("score", 50)
+
+            # 计算加权总分
+            overall_score = data.get("overall_score", 50)
+            if not dimension_scores:
+                # 如果LLM没有返回维度分数，手动计算
+                weighted_sum = 0
+                for d in dimensions:
+                    name = d["name"]
+                    if name in dimension_scores:
+                        weighted_sum += dimension_scores[name] * d.get("weight", 0.25)
+                overall_score = int(weighted_sum / total_weight)
+
+            # 聚合所有亮点和顾虑
+            all_highlights = []
+            all_concerns = []
+            for dim_data in data.get("dimensions", []):
+                all_highlights.extend(dim_data.get("highlights", []))
+                all_concerns.extend(dim_data.get("concerns", []))
+
+            # 添加综合亮点和顾虑
+            all_highlights.extend(data.get("highlights", []))
+            all_concerns.extend(data.get("concerns", []))
+
             return MatchResult(
-                overall_score=data.get("overall_score", 50),
-                skill_score=data.get("skill_score", 50),
-                experience_score=data.get("experience_score", 50),
-                education_score=data.get("education_score", 50),
-                intention_score=50,
+                overall_score=overall_score,
+                skill_score=dimension_scores.get("技能匹配", 50),
+                experience_score=dimension_scores.get("工作经验", 50),
+                education_score=dimension_scores.get("教育背景", 50),
+                intention_score=dimension_scores.get("求职意向", 50),
                 matched_skills=data.get("matched_skills", []),
                 missing_skills=data.get("missing_skills", []),
-                highlights=data.get("highlights", []),
-                concerns=data.get("concerns", [])
+                highlights=all_highlights[:5],  # 限制数量
+                concerns=all_concerns[:5]
             )
         except Exception as e:
             print(f"[JobMatcher] AI匹配失败，回退到规则匹配: {e}")
